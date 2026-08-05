@@ -189,7 +189,9 @@ class CustomHTTPAdapter(BaseImageAdapter):
             "reference_images_count": len(request.images),
             "reference_images": image_data_urls,
             "reference_images_base64": image_base64,
+            "reference_images_base64_nullable": image_base64 if len(image_base64) > 0 else None,
             "reference_images_data_url": image_data_urls,
+            "reference_images_data_url_nullable": image_data_urls if len(image_data_urls) > 0 else None,
             "reference_images_mime_types": image_mime_types,
             "reference_image_0": first_data_url,
             "reference_image_0_base64": first_base64,
@@ -233,12 +235,19 @@ class CustomHTTPAdapter(BaseImageAdapter):
 
     def _render_template_value(self, value: Any, context: dict[str, Any]) -> Any:
         if isinstance(value, dict):
-            return {
-                self._render_template_string(
-                    str(key), context
-                ): self._render_template_value(item, context)
-                for key, item in value.items()
-            }
+            rendered: dict[str, Any] = {}
+            for key, item in value.items():
+                if (
+                    isinstance(item, str)
+                    and (match := EXACT_PLACEHOLDER_PATTERN.match(item))
+                    and match.group(1) in context
+                    and context[match.group(1)] is None
+                ):
+                    continue
+                rendered[self._render_template_string(str(key), context)] = (
+                    self._render_template_value(item, context)
+                )
+            return rendered
         if isinstance(value, list):
             return [self._render_template_value(item, context) for item in value]
         if isinstance(value, str):

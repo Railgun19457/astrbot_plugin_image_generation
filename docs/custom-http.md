@@ -80,7 +80,9 @@ JSON 类型配置项已启用代码编辑器模式，适合编辑复杂 payload�
 | `{reference_image_count}` | 参考图数量。 |
 | `{reference_images}` | 参考图 data URL 数组。 |
 | `{reference_images_data_url}` | 参考图 data URL 数组。 |
+| `{reference_images_data_url_nullable}` | 参考图 data URL 数组，可空。 |
 | `{reference_images_base64}` | 参考图纯 base64 数组。 |
+| `{reference_images_base64_nullable}` | 参考图纯 base64 数组，可空。 |
 | `{reference_images_mime_types}` | 参考图 MIME 类型数组。 |
 | `{reference_image_0}` | 第一张参考图 data URL。 |
 | `{reference_image_0_data_url}` | 第一张参考图 data URL。 |
@@ -107,7 +109,24 @@ JSON 类型配置项已启用代码编辑器模式，适合编辑复杂 payload�
 }
 ```
 
-如果占位符只是字符串的一部分，则会按字符串替换：
+**注意**：在此情形下，表中以`_nullable`结尾的两个占位符，当原数组为空数组时渲染后json中将不带此项，否则与本身值相同：
+
+```json
+{
+  "images": "{reference_images_base64_nullable}",
+  "prompt": "{prompt}"
+}
+```
+
+当没有参考图时，将被渲染为：
+
+```json
+{
+  "prompt": "Draw a cat."
+}
+```
+
+如果占位符只是字符串的一部分，则仍然会按字符串替换：
 
 ```json
 {
