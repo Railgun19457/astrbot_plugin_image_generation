@@ -271,6 +271,7 @@ LLM 生图工具支持 `preset`、`persona`、`aspect_ratio`、`resolution`、`i
 - 火山方舟的可用模型列表需要按控制台实际 Model ID 或 Endpoint ID 配置。
 - 配置 `jimeng2api` 后，插件会在启动时和每天日期变更后自动领取积分；仅直接连接即梦逆向服务时有效。
 - 即梦逆向图生图使用 `/v1/images/compositions`，使用中转可能会导致图生图失败。
+- OpenAI Images 文生图默认使用流式响应。中转缓冲或截断大型完成事件时可关闭“启用流式响应”，并可把 GPT Image 输出格式设为 JPEG 以缩小 Base64 响应。
 - Codex Responses 接口支持在单次 HTTP 请求内返回最终图片的文生图和图生图；参考图会作为多模态 `input_image` data URL 发送，但宽高比和分辨率会被忽略。若日志在约 150 秒显示 `Server disconnected`、后续任务仍成功，通常是服务端或中间网络主动断开后触发了插件重试，而不是本插件的请求超时；详见 [Codex Responses 接口配置](docs/codex-responses.md)。
 - 自定义 HTTP 接口为高级功能，建议先阅读 [自定义 HTTP 接口配置](docs/custom-http.md)。
 - 开启调试请求日志或详细错误信息时，插件会做脱敏和摘要处理，但仍建议避免在公共环境暴露日志。
