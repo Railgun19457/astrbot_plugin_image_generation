@@ -35,7 +35,11 @@ ADAPTER_EXTRA_DEFAULTS: dict[AdapterType, dict[str, Any]] = {
         "prompt_prefix": "Generate an image: ",
         "modalities": ["image", "text"],
     },
-    AdapterType.OPENAI: {"model_family": "auto"},
+    AdapterType.OPENAI: {
+        "model_family": "auto",
+        "enable_streaming": True,
+        "output_format": "png",
+    },
     AdapterType.AGNES_AI: {"response_format": "base64"},
 }
 LOG = log_prefix("Config")

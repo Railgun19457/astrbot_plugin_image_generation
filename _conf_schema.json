@@ -292,6 +292,23 @@
               "dall-e"
             ],
             "default": "auto"
+          },
+          "enable_streaming": {
+            "description": "启用流式响应",
+            "hint": "默认开启并使用 OpenAI Images SSE。部分中转会缓冲或截断最终图片事件，遇到超时或响应体不完整时可关闭。",
+            "type": "bool",
+            "default": true
+          },
+          "output_format": {
+            "description": "GPT Image 输出格式",
+            "hint": "PNG 保留无损质量；JPEG 响应更小，适合会截断大型 Base64 响应的中转接口。仅影响 GPT Image 系列。",
+            "type": "string",
+            "options": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "default": "png"
           }
         }
       },

@@ -229,6 +229,9 @@ class BaseImageAdapter(abc.ABC):
             exc: Exception or error object.
             label: Human-readable error label.
         """
+        error_text = safe_log_error_body(exc)
+        if not error_text:
+            error_text = type(exc).__name__
         logger.error(
             f"{self._get_log_prefix(request.task_id)} "
             + format_log_event(
@@ -236,7 +239,7 @@ class BaseImageAdapter(abc.ABC):
                 类型=label,
                 **self._format_request_context(request),
                 耗时=format_seconds(duration),
-                错误=safe_log_error_body(exc),
+                错误=error_text,
             )
         )
 
