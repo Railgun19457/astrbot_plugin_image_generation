@@ -1,4 +1,9 @@
 ### 更新日志
+- **v1.6.4-2026-08-27**
+  - 新增配置「由 LLM 工具调用处理命令」与「由 LLM 接管的命令」（默认关闭；首期可选「生图」）。
+  - 开启且已启用生图工具时，有提示词的 `/生图` 不再由插件直接提交任务，而是 `request_llm` 交给当前会话聊天模型，结合人设与上下文调用 `generate_image`；空 `/生图`、任务/模型/预设等命令行为不变。
+  - 无可用聊天模型或未启用生图工具时，与关闭开关相同，回退为原命令直提路径。
+
 - **v1.6.3-2026-08-12**
   - 规范化 Grok / xAI 适配器为官方 Images REST 格式：文生图走 `/v1/images/generations`，图生图走 `/v1/images/edits`，始终使用 `application/json`；单参考图发送 `image: {url, type}`，多参考图发送 `images`（最多 3 张，与 `image` 互斥）；参考图优先复用公网/`data:` URL，否则编码为 base64 data URL。
   - 修复此前 Grok 图生图误用 `multipart/form-data` 导致的 `415 图片编辑仅支持 application/json`。

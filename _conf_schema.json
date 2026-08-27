@@ -15,6 +15,19 @@
       "生图任务工具"
     ]
   },
+  "llm_handles_commands": {
+    "description": "由 LLM 工具调用处理命令",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，下方勾选的命令不再由插件直接提交生图，而是交给当前会话的聊天模型，结合上下文与人设调用 generate_image 等工具。需同时启用「生图工具」；否则仍按原命令执行。默认关闭。"
+  },
+  "llm_handled_commands": {
+    "description": "由 LLM 接管的命令",
+    "type": "list",
+    "options": ["生图"],
+    "default": ["生图"],
+    "hint": "仅在「由 LLM 工具调用处理命令」开启时生效。首期仅支持「生图」：有提示词的 /生图 会交给会话 LLM；空 /生图 仍显示本地帮助。"
+  },
   "api_providers": {
     "type": "template_list",
     "description": "图像模型供应商",

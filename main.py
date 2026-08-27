@@ -29,6 +29,7 @@ from .core.tasks.models import (
 )
 from .core.adapters.generator import ImageGenerator
 from .core.generation.image_processor import ImageProcessor
+from .core.llm.command_handoff import try_request_llm_handoff
 from .core.llm.result_handler import LLMResultHandler
 from .core.llm.tools import (
     ImageGenerationTool,
@@ -37,6 +38,7 @@ from .core.llm.tools import (
     PresetQueryTool,
     adjust_tool_parameters,
 )
+from .core.shared.constants import LLM_HANDLED_COMMAND_GENERATE
 from .core.shared.logging import (
     log_prefix,
     mask_sensitive,
@@ -685,6 +687,65 @@ class ImageGenerationPlugin(Star):
         if not raw_prompt:
             yield event.plain_result(self.format_image_command_help())
             return
+
+        if self.config_manager.should_llm_handle_command(LLM_HANDLED_COMMAND_GENERATE):
+            tokens = raw_prompt.split()
+            if tokens and tokens[-1].isdecimal():
+                image_count, handoff_demand = self._parse_command_image_count(
+                    raw_prompt
+                )
+                handoff_image_count: int | None = image_count
+            else:
+                image_count = self.config_manager.default_image_count
+                handoff_demand = raw_prompt
+                handoff_image_count = None
+
+            if not handoff_demand.strip():
+                yield event.plain_result("❌ 请提供图片生成的提示词或预设名称！")
+                return
+
+            if not self.generator or not self.generator.adapter:
+                logger.debug(
+                    f"{LOG} 生图指令失败: 生成器未初始化，用户={masked_uid}"
+                )
+                yield event.plain_result("❌ 生图生成器未初始化")
+                return
+
+            if not self.has_required_api_key():
+                logger.debug(
+                    f"{LOG} 生图指令失败: 未配置 API Key，用户={masked_uid}"
+                )
+                yield event.plain_result("❌ 未配置 API Key，无法生成图片")
+                return
+
+            check_result = self.usage_manager.check_rate_limit(
+                user_id,
+                is_admin=is_usage_limit_admin,
+                requested_count=image_count,
+                update_timestamp=False,
+            )
+            if isinstance(check_result, str):
+                if check_result:
+                    yield event.plain_result(check_result)
+                return
+
+            if rejection := self.task_manager.get_generation_queue_rejection():
+                _code, message = rejection
+                yield event.plain_result(f"❌ 生图任务提交失败: {message}")
+                return
+
+            provider_request = await try_request_llm_handoff(
+                self,
+                event,
+                raw_demand=handoff_demand,
+                image_count=handoff_image_count,
+            )
+            if provider_request is not None:
+                yield provider_request
+                return
+            logger.info(
+                f"{LOG} LLM 接管 /生图 不可用，回退为直接执行指令: 用户={masked_uid}"
+            )
 
         if not self.generator or not self.generator.adapter:
             logger.debug(f"{LOG} 生图指令失败: 生成器未初始化，用户={masked_uid}")

@@ -169,6 +169,15 @@
         "Preset editing tool"
       ]
     },
+    "llm_handles_commands": {
+      "description": "Handle commands via LLM tools",
+      "hint": "When enabled, selected commands are not submitted directly by the plugin. They are handed to the current chat model so it can use context and persona, then call tools such as generate_image. The image generation tool must also be enabled; otherwise commands keep the original direct path. Disabled by default."
+    },
+    "llm_handled_commands": {
+      "description": "Commands handed to the LLM",
+      "hint": "Only applies when \"Handle commands via LLM tools\" is on. Currently only \"Generate image\": a non-empty /生图 is handed to the session LLM; an empty /生图 still shows local help.",
+      "labels": ["Generate image"]
+    },
     "api_providers": {
       "description": "Image model providers",
       "hint": "Configure one or more image generation providers. Model selection uses the format \"Provider name/Model name\".",

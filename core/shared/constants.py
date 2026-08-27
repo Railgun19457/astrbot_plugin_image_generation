@@ -127,6 +127,15 @@ ALL_LLM_TOOLS = (
 """All selectable LLM tool names."""
 
 
+# Commands that can be handed off to the session LLM.
+
+LLM_HANDLED_COMMAND_GENERATE = "生图"
+"""Command label for /生图 handoff."""
+
+ALL_LLM_HANDLED_COMMANDS = (LLM_HANDLED_COMMAND_GENERATE,)
+"""All selectable command labels for LLM command handoff."""
+
+
 # Result metadata items.
 
 RESULT_INFO_DURATION = "耗时"

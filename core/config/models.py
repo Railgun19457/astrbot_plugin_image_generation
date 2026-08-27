@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..shared.constants import (
+    ALL_LLM_HANDLED_COMMANDS,
     ALL_LLM_TOOLS,
     DEFAULT_ASPECT_RATIO,
     DEFAULT_AUDIT_MAX_RETRY_ATTEMPTS,
@@ -128,6 +129,10 @@ class PluginConfig:
     presets: dict[str, Any] = field(default_factory=dict)
     personas: dict[str, PersonaTemplate] = field(default_factory=dict)
     enabled_llm_tools: set[str] = field(default_factory=lambda: set(ALL_LLM_TOOLS))
+    llm_handles_commands: bool = False
+    llm_handled_commands: set[str] = field(
+        default_factory=lambda: set(ALL_LLM_HANDLED_COMMANDS)
+    )
 
 
 __all__ = (

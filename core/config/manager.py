@@ -20,6 +20,7 @@ from .models import (
 from .provider_parser import ConfigProviderParserMixin
 from .templates import ConfigTemplateStoreMixin
 from ..shared.constants import (
+    ALL_LLM_HANDLED_COMMANDS,
     ALL_LLM_TOOLS,
     ALL_RESULT_INFO_ITEMS,
     DEFAULT_ASPECT_RATIO,
@@ -129,6 +130,16 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
             enabled_llm_tools=set(
                 self._parse_enabled_llm_tools(
                     self._config.get("enable_llm_tool", list(ALL_LLM_TOOLS))
+                )
+            ),
+            llm_handles_commands=self._get_bool(
+                self._config, "llm_handles_commands", False
+            ),
+            llm_handled_commands=set(
+                self._parse_llm_handled_commands(
+                    self._config.get(
+                        "llm_handled_commands", list(ALL_LLM_HANDLED_COMMANDS)
+                    )
                 )
             ),
         )
@@ -404,6 +415,27 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
                 selected.append(tool_name)
         return selected
 
+    def _parse_llm_handled_commands(self, raw: Any) -> list[str]:
+        """Parse command labels that may be handed off to the session LLM."""
+        if isinstance(raw, bool):
+            return list(ALL_LLM_HANDLED_COMMANDS) if raw else []
+
+        if not isinstance(raw, list):
+            logger.warning(
+                f"{LOG} llm_handled_commands 配置格式错误，已按默认列表处理"
+            )
+            return list(ALL_LLM_HANDLED_COMMANDS)
+
+        selected: list[str] = []
+        for item in raw:
+            command_name = str(item).strip()
+            if (
+                command_name in ALL_LLM_HANDLED_COMMANDS
+                and command_name not in selected
+            ):
+                selected.append(command_name)
+        return selected
+
     def _coerce_int(self, value: Any, default: int, *, min_value: int) -> int:
         """Safely coerce a value to int and clamp it."""
         if isinstance(value, bool):
@@ -467,6 +499,14 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
     def is_llm_tool_enabled(self, tool_name: str) -> bool:
         """Return whether an LLM tool is enabled."""
         return tool_name in self._plugin_config.enabled_llm_tools
+
+    def should_llm_handle_command(self, command_name: str) -> bool:
+        """Return whether a slash command should be handed off to the session LLM."""
+        if not self._plugin_config.llm_handles_commands:
+            return False
+        if not self.is_llm_tool_enabled(LLM_TOOL_IMAGE_GENERATION):
+            return False
+        return command_name in self._plugin_config.llm_handled_commands
 
     @property
     def default_aspect_ratio(self) -> str:
