@@ -4,7 +4,7 @@
 
 当前版本支持：
 
-- 固定 `POST /codex/responses` 请求
+- `POST` 同步请求，接口路径默认为 `/codex/responses`，可改为 `/v1/responses` 等
 - `Authorization: Bearer <API Key>` 认证
 - 同步 JSON 响应
 - 文生图和参考图驱动的图像编辑
@@ -25,21 +25,20 @@
 1. 在“图像模型供应商”中新增 **Codex Responses 接口**。
 2. 填写供应商名称，例如 `宝宝AI`。
 3. 在“接口地址”填写服务根地址，例如 `https://baobao-ai.com`。
-4. 在“API 密钥”填写宝宝 AI API Key。
-5. 在“可用模型列表”填写服务实际支持的模型，例如 `gpt-5.6-terra`。
-6. 在“生图模型”中选择 `宝宝AI/gpt-5.6-terra`。
+4. 在“接口路径”填写实际路径；默认 `/codex/responses`。标准 OpenAI Responses 填 `/v1/responses`。
+5. 在“API 密钥”填写宝宝 AI API Key。
+6. 在“可用模型列表”填写服务实际支持的模型，例如 `gpt-5.6-terra`。
+7. 在“生图模型”中选择 `宝宝AI/gpt-5.6-terra`。
 
-接口地址会自动规范化并拼接为 `/codex/responses`。以下填写都会请求同一地址：
+实际请求地址由接口地址和接口路径直接拼接，不再猜测或改写路径：
 
-| 接口地址 | 实际请求地址 |
-| :--- | :--- |
-| `https://baobao-ai.com` | `https://baobao-ai.com/codex/responses` |
-| `https://baobao-ai.com/` | `https://baobao-ai.com/codex/responses` |
-| `https://baobao-ai.com/v1` | `https://baobao-ai.com/codex/responses` |
-| `https://baobao-ai.com/codex` | `https://baobao-ai.com/codex/responses` |
-| `https://baobao-ai.com/codex/responses` | `https://baobao-ai.com/codex/responses` |
+| 接口地址 | 接口路径 | 实际请求地址 |
+| :--- | :--- | :--- |
+| `https://baobao-ai.com` | `/codex/responses` | `https://baobao-ai.com/codex/responses` |
+| `https://api.example.com` | `/v1/responses` | `https://api.example.com/v1/responses` |
+| `https://chatgpt.com/backend-api` | `/codex/responses` | `https://chatgpt.com/backend-api/codex/responses` |
 
-接口地址必须是 `http://` 或 `https://` URL，且不能包含查询参数或片段。
+接口地址必须是 `http://` 或 `https://` URL，且不能包含查询参数或片段。不要把完整接口路径填进接口地址。
 
 ## 固定请求格式
 

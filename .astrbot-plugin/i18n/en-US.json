@@ -306,6 +306,10 @@
               "GPT Image",
               "DALL·E"
             ]
+          },
+          "enable_streaming": {
+            "description": "Use SSE streaming",
+            "hint": "Enabled by default for text-to-image requests. Disable this for compatible endpoints that do not support SSE and expect a normal JSON response."
           }
         },
         "volcengine_ark": {
@@ -600,10 +604,14 @@
         },
         "codex_responses": {
           "name": "Codex Responses API",
-          "hint": "Calls Codex Responses image API /codex/responses.",
+          "hint": "Calls Codex or OpenAI Responses image APIs. The path defaults to /codex/responses and can be set to /v1/responses.",
           "base_url": {
             "description": "API endpoint",
-            "hint": "Enter the official OpenAI Codex endpoint https://chatgpt.com/backend-api/codex/responses, or its service root https://chatgpt.com/backend-api. The plugin normalizes the URL and appends /codex/responses; do not include query parameters."
+            "hint": "Enter the service root, for example https://baobao-ai.com or https://api.example.com. Do not include query parameters. The request URL is this address plus the path below."
+          },
+          "endpoint": {
+            "description": "API path",
+            "hint": "Joined with the service root. Default is /codex/responses. Use /v1/responses for standard OpenAI Responses APIs."
           },
           "proxy": {
             "description": "Proxy URL",

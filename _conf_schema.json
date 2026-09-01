@@ -292,6 +292,12 @@
               "dall-e"
             ],
             "default": "auto"
+          },
+          "enable_streaming": {
+            "description": "使用 SSE 流式请求",
+            "hint": "文生图默认开启 SSE。部分兼容站点不支持流式时可关闭，改为普通 JSON 响应。",
+            "type": "bool",
+            "default": true
           }
         }
       },
@@ -1019,7 +1025,7 @@
       },
       "codex_responses": {
         "name": "Codex Responses 接口",
-        "hint": "调用 Codex Responses 图像接口 /codex/responses。",
+        "hint": "调用 Codex / OpenAI Responses 图像接口；接口路径默认为 /codex/responses，也可填写 /v1/responses。",
         "display_item": "name",
         "hide_hint_in_list": true,
         "items": {
@@ -1031,9 +1037,15 @@
           },
           "base_url": {
             "description": "接口地址",
-            "hint": "填写 OpenAI 官方 Codex 入口 https://chatgpt.com/backend-api/codex/responses，或填写根地址 https://chatgpt.com/backend-api；插件会自动规范化并拼接 /codex/responses，不要填写查询参数。",
+            "hint": "填写服务根地址，例如 https://baobao-ai.com 或 https://api.example.com；不要填写查询参数。实际请求地址由该地址与下方接口路径拼接。",
             "type": "string",
             "default": ""
+          },
+          "endpoint": {
+            "description": "接口路径",
+            "hint": "相对接口地址拼接。默认 /codex/responses；标准 OpenAI Responses 可填 /v1/responses。",
+            "type": "string",
+            "default": "/codex/responses"
           },
           "proxy": {
             "description": "代理地址",

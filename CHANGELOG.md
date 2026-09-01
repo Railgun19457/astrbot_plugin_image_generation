@@ -1,4 +1,8 @@
 ### 更新日志
+- **v1.6.4-2026-09-01**
+  - OpenAI Images 适配器新增文生图 SSE 流式开关，默认开启；关闭后改为普通 JSON 响应，便于不支持 SSE 的兼容站点使用（#60）。流式请求不再按模型 ID 自动判断。
+  - Codex Responses 适配器新增可配置接口路径，默认 `/codex/responses`；填写服务根地址后按配置拼接，不再猜测或改写 `/v1`、`/codex` 路径（#61）。
+
 - **v1.6.3-2026-08-12**
   - 规范化 Grok / xAI 适配器为官方 Images REST 格式：文生图走 `/v1/images/generations`，图生图走 `/v1/images/edits`，始终使用 `application/json`；单参考图发送 `image: {url, type}`，多参考图发送 `images`（最多 3 张，与 `image` 互斥）；参考图优先复用公网/`data:` URL，否则编码为 base64 data URL。
   - 修复此前 Grok 图生图误用 `multipart/form-data` 导致的 `415 图片编辑仅支持 application/json`。

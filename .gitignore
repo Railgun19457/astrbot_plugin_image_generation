@@ -6,3 +6,4 @@ dev/
 .ruff_cache/
 data/
 TODO.md
+tests/
