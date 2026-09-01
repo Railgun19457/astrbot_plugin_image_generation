@@ -83,7 +83,16 @@ class OpenAIAdapter(BaseImageAdapter):
             url = f"{base}/v1/images/generations"
             headers["Content-Type"] = "application/json"
             payload = self._build_payload(request)
-            if is_gpt:
+            enable_streaming = self.config.extra.get("enable_streaming", True)
+            if isinstance(enable_streaming, str):
+                enable_streaming = enable_streaming.strip().lower() not in {
+                    "false",
+                    "0",
+                    "no",
+                    "off",
+                    "",
+                }
+            if enable_streaming:
                 payload["stream"] = True
             kwargs = {"json": payload}
             self._log_request_overview(request, url, payload=payload)
@@ -113,11 +122,7 @@ class OpenAIAdapter(BaseImageAdapter):
                         resp.status,
                         error_text,
                     )
-                if (
-                    is_gpt
-                    and "text/event-stream"
-                    in resp.headers.get("Content-Type", "").lower()
-                ):
+                if "text/event-stream" in resp.headers.get("Content-Type", "").lower():
                     data = await self._read_stream_response(resp, request.task_id)
                 else:
                     data = await self._read_response_json(resp, request.task_id)

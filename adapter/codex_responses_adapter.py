@@ -142,7 +142,7 @@ class CodexResponsesAdapter(BaseImageAdapter):
         }
 
     def _build_responses_url(self) -> tuple[str, str | None]:
-        """Normalize a configured service root to its fixed Codex Responses path."""
+        """Join the configured service root with the Responses endpoint path."""
         base = (self.base_url or "").strip()
         if not base:
             return "", "未配置 Codex Responses 接口地址"
@@ -153,16 +153,13 @@ class CodexResponsesAdapter(BaseImageAdapter):
         if parsed.query or parsed.fragment:
             return "", "Codex Responses 接口地址不能包含查询参数或片段"
 
-        path = parsed.path.rstrip("/")
-        if path.endswith("/codex/responses"):
-            endpoint_path = path
-        elif path.endswith("/codex"):
-            endpoint_path = f"{path}/responses"
-        else:
-            if path.endswith("/v1"):
-                path = path[: -len("/v1")]
-            endpoint_path = f"{path}/codex/responses"
+        endpoint = str(self.config.extra.get("endpoint") or "/codex/responses").strip()
+        if not endpoint:
+            endpoint = "/codex/responses"
+        if endpoint.startswith(("http://", "https://")):
+            return endpoint, None
 
+        endpoint_path = f"{parsed.path.rstrip('/')}/" + endpoint.lstrip("/")
         return urlunsplit((parsed.scheme, parsed.netloc, endpoint_path, "", "")), None
 
     def _parse_response_json(

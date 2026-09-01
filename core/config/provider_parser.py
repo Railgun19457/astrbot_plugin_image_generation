@@ -35,8 +35,9 @@ ADAPTER_EXTRA_DEFAULTS: dict[AdapterType, dict[str, Any]] = {
         "prompt_prefix": "Generate an image: ",
         "modalities": ["image", "text"],
     },
-    AdapterType.OPENAI: {"model_family": "auto"},
+    AdapterType.OPENAI: {"model_family": "auto", "enable_streaming": True},
     AdapterType.AGNES_AI: {"response_format": "base64"},
+    AdapterType.CODEX_RESPONSES: {"endpoint": "/codex/responses"},
 }
 LOG = log_prefix("Config")
 
@@ -78,7 +79,8 @@ class ConfigProviderParserMixin:
             name=str(provider_item.get("name", "")).strip(),
             base_url=self._clean_base_url(
                 base_url,
-                preserve_version_path=adapter_type == AdapterType.CUSTOM_HTTP,
+                preserve_version_path=adapter_type
+                in {AdapterType.CUSTOM_HTTP, AdapterType.CODEX_RESPONSES},
             ),
             api_keys=self._parse_string_list(provider_item.get("api_keys", [])),
             available_models=self._parse_string_list(
