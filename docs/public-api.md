@@ -68,7 +68,7 @@ async def submit_generation_task(
 
 | 参数 | 说明 |
 | :--- | :--- |
-| `prompt` | 额外提示词。若 `presets` 或 `personas` 能生成有效提示词，可为空。 |
+| `prompt` | 额外提示词。默认不会从正文匹配模板名称；开启插件“提示词正文匹配”后才会扫描勾选的预设/人设。若 `presets` 或 `personas` 能生成有效提示词，可为空。 |
 | `unified_msg_origin` | 可选会话作用域。传入后按该会话检查并扣减额度。 |
 | `source` | 任务来源，仅用于日志和任务记录，建议填调用方插件名。 |
 | `image_count` | 生成数量；不传使用插件默认值，超过插件配置上限会被截断。 |
@@ -83,6 +83,7 @@ async def submit_generation_task(
 ### 行为
 
 - 最终提示词按 `presets` → `personas` → `prompt` 顺序拼接。
+- 插件默认不扫描 `prompt` 正文中的模板名称；开启“提示词正文匹配”后才会按勾选项补匹配。
 - 预设可以覆盖 `aspect_ratio` 和 `resolution`。
 - 参考图会自动下载、读取、大小检查和去重。
 - 当前适配器不支持图生图时，所有参考图会被忽略。

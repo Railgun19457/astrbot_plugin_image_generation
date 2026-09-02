@@ -63,6 +63,7 @@ from .core.tasks.ids import new_task_id
 from .core.tasks.manager import TaskManager
 from .core.config.templates import (
     build_generation_prompt,
+    extract_templates_from_prompt,
     find_named_entry,
     format_template_summary,
     parse_preset_prompt,
@@ -451,10 +452,52 @@ class ImageGenerationPlugin(Star):
         aspect_ratio: str,
         resolution: str,
     ) -> tuple[str, str, str, list[str], list[str], list[tuple[str, str]]]:
-        """Apply leading space-separated preset/persona names to a command prompt."""
+        """Apply command prompt templates by leading tokens or optional body match.
+
+        Args:
+            prompt: Command prompt after image-count suffix parsing.
+            aspect_ratio: Current aspect ratio, updated by JSON presets.
+            resolution: Current resolution, updated by JSON presets.
+
+        Returns:
+            Final prompt, aspect ratio, resolution, matched preset names,
+            matched persona names, and persona reference images.
+        """
         raw_prompt = prompt.strip()
         if not raw_prompt:
             return "", aspect_ratio, resolution, [], [], []
+
+        if self.config_manager.match_templates_in_prompt_body:
+            (
+                extra_content,
+                aspect_ratio,
+                resolution,
+                preset_prompts,
+                persona_prompts,
+                matched_presets,
+                matched_personas,
+                persona_images,
+            ) = extract_templates_from_prompt(
+                raw_prompt,
+                self.config_manager.prompt_body_presets(),
+                self.config_manager.prompt_body_personas(),
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+            )
+            if not matched_presets and not matched_personas:
+                return raw_prompt, aspect_ratio, resolution, [], [], []
+            return (
+                build_generation_prompt(
+                    preset_prompts=preset_prompts,
+                    persona_prompts=persona_prompts,
+                    extra_prompt=extra_content,
+                ),
+                aspect_ratio,
+                resolution,
+                matched_presets,
+                matched_personas,
+                persona_images,
+            )
 
         tokens = raw_prompt.split()
         preset_prompts: list[str] = []
@@ -477,7 +520,10 @@ class ImageGenerationPlugin(Star):
                 matched_presets.append(matched_preset)
                 continue
 
-            matched_persona = find_named_entry(self.config_manager.personas, token)
+            matched_persona = find_named_entry(
+                self.config_manager.personas,
+                token,
+            )
             if matched_persona:
                 persona = self.config_manager.personas[matched_persona]
                 persona_prompt = persona.prompt.strip()

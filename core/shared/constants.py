@@ -157,6 +157,21 @@ DEFAULT_RESULT_INFO_ITEMS = (RESULT_INFO_USAGE,)
 """Default generated result metadata items."""
 
 
+# Prompt-body template matching.
+
+PROMPT_BODY_MATCH_PRESET = "预设"
+"""Match configured preset names in prompt body text."""
+
+PROMPT_BODY_MATCH_PERSONA = "人设"
+"""Match configured persona names in prompt body text."""
+
+ALL_PROMPT_BODY_TEMPLATE_MATCH_ITEMS = (
+    PROMPT_BODY_MATCH_PRESET,
+    PROMPT_BODY_MATCH_PERSONA,
+)
+"""Selectable prompt-body template match kinds. Empty means disabled."""
+
+
 # Default safety audit prompts.
 
 DEFAULT_PROMPT_AUDIT_PROMPT = (

@@ -1,7 +1,7 @@
 name: astrbot_plugin_image_generation
 display_name: 通用生图
 desc: 通用图像生成插件，支持多种图像生成模型和多样化的生成方式
-version: v1.6.4
+version: v1.6.5
 author: Railgun19457
 repo: https://github.com/Railgun19457/astrbot_plugin_image_generation
 astrbot_version: ">=4.25.3"

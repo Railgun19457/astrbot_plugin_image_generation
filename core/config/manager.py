@@ -21,6 +21,7 @@ from .provider_parser import ConfigProviderParserMixin
 from .templates import ConfigTemplateStoreMixin
 from ..shared.constants import (
     ALL_LLM_TOOLS,
+    ALL_PROMPT_BODY_TEMPLATE_MATCH_ITEMS,
     ALL_RESULT_INFO_ITEMS,
     DEFAULT_ASPECT_RATIO,
     DEFAULT_AUDIT_MAX_RETRY_ATTEMPTS,
@@ -44,6 +45,8 @@ from ..shared.constants import (
     LLM_TOOL_PRESET_EDIT,
     LLM_TOOL_PRESET_QUERY,
     LLM_TOOL_TASK_MANAGEMENT,
+    PROMPT_BODY_MATCH_PERSONA,
+    PROMPT_BODY_MATCH_PRESET,
     RESULT_INFO_COUNT,
     RESULT_INFO_DURATION,
     RESULT_INFO_MODEL,
@@ -126,6 +129,9 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
             safety_audit_settings=self._parse_safety_audit_settings(safety_cfg),
             presets=self._load_presets(prompt_templates_cfg.get("presets", [])),
             personas=self._load_personas(prompt_templates_cfg.get("personas", [])),
+            prompt_body_template_match=self._parse_prompt_body_template_match(
+                prompt_templates_cfg
+            ),
             enabled_llm_tools=set(
                 self._parse_enabled_llm_tools(
                     self._config.get("enable_llm_tool", list(ALL_LLM_TOOLS))
@@ -280,6 +286,19 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
             cfg.get("result_info_items", list(DEFAULT_RESULT_INFO_ITEMS))
         )
         valid_items = set(ALL_RESULT_INFO_ITEMS)
+        return {item for item in selected if item in valid_items}
+
+    def _parse_prompt_body_template_match(self, cfg: dict[str, Any]) -> set[str]:
+        """Parse selected prompt-body template match kinds.
+
+        Args:
+            cfg: Prompt template config section.
+
+        Returns:
+            Selected match kinds. Empty means prompt-body matching is off.
+        """
+        selected = self._parse_string_list(cfg.get("prompt_body_template_match", []))
+        valid_items = set(ALL_PROMPT_BODY_TEMPLATE_MATCH_ITEMS)
         return {item for item in selected if item in valid_items}
 
     def _parse_safety_audit_settings(self, cfg: dict[str, Any]) -> SafetyAuditSettings:
@@ -462,6 +481,30 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
     @property
     def personas(self) -> dict[str, PersonaTemplate]:
         """Return configured persona templates."""
+        return self._plugin_config.personas
+
+    @property
+    def prompt_body_template_match(self) -> set[str]:
+        """Return selected prompt-body template match kinds."""
+        return self._plugin_config.prompt_body_template_match
+
+    @property
+    def match_templates_in_prompt_body(self) -> bool:
+        """Return whether any prompt-body template matching is enabled."""
+        return bool(self._plugin_config.prompt_body_template_match)
+
+    def prompt_body_presets(self) -> dict[str, Any]:
+        """Return presets scanned in prompt body, or empty when disabled."""
+        selected = self._plugin_config.prompt_body_template_match
+        if PROMPT_BODY_MATCH_PRESET not in selected:
+            return {}
+        return self._plugin_config.presets
+
+    def prompt_body_personas(self) -> dict[str, PersonaTemplate]:
+        """Return personas scanned in prompt body, or empty when disabled."""
+        selected = self._plugin_config.prompt_body_template_match
+        if PROMPT_BODY_MATCH_PERSONA not in selected:
+            return {}
         return self._plugin_config.personas
 
     def is_llm_tool_enabled(self, tool_name: str) -> bool:
