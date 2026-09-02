@@ -127,6 +127,7 @@ class PluginConfig:
     )
     presets: dict[str, Any] = field(default_factory=dict)
     personas: dict[str, PersonaTemplate] = field(default_factory=dict)
+    prompt_body_template_match: set[str] = field(default_factory=set)
     enabled_llm_tools: set[str] = field(default_factory=lambda: set(ALL_LLM_TOOLS))
 
 

@@ -82,6 +82,163 @@ def find_named_entry(entries: dict[str, Any], token: str) -> str | None:
     return None
 
 
+def _ascii_token_boundary_ok(text: str, start: int, end: int) -> bool:
+    """Return whether an ASCII template name sits on a token boundary.
+
+    CJK names are matched as substrings. ASCII names must not match inside a
+    longer ASCII word, so ``cat`` does not match ``category``.
+    """
+    name = text[start:end]
+    if not name.isascii():
+        return True
+    if (
+        start > 0
+        and text[start - 1].isascii()
+        and text[start - 1].isalnum()
+        and name[0].isalnum()
+    ):
+        return False
+    if (
+        end < len(text)
+        and text[end].isascii()
+        and text[end].isalnum()
+        and name[-1].isalnum()
+    ):
+        return False
+    return True
+
+
+def extract_templates_from_prompt(
+    prompt: str,
+    presets: dict[str, Any],
+    personas: dict[str, PersonaTemplate],
+    *,
+    aspect_ratio: str,
+    resolution: str,
+    skip_names: list[str] | None = None,
+) -> tuple[
+    str,
+    str,
+    str,
+    list[str],
+    list[str],
+    list[str],
+    list[str],
+    list[tuple[str, str]],
+]:
+    """Match configured preset/persona names anywhere in prompt text.
+
+    Longer names win at the same position. Each template is applied at most
+    once. Scanning is linear in prompt length times template count and stays
+    cheap for typical plugin-scale lists.
+
+    Args:
+        prompt: User-provided prompt that may contain template names.
+        presets: Configured preset name-to-content mapping.
+        personas: Configured persona templates.
+        aspect_ratio: Current aspect ratio, updated by JSON presets.
+        resolution: Current resolution, updated by JSON presets.
+        skip_names: Template names already applied by explicit parameters.
+
+    Returns:
+        Remaining extra prompt, aspect ratio, resolution, preset prompt
+        fragments, persona prompt fragments, matched preset names, matched
+        persona names, and persona reference images.
+    """
+    extra_source = str(prompt or "").strip()
+    empty: tuple[
+        str,
+        str,
+        str,
+        list[str],
+        list[str],
+        list[str],
+        list[str],
+        list[tuple[str, str]],
+    ] = ("", aspect_ratio, resolution, [], [], [], [], [])
+    if not extra_source:
+        return empty
+
+    needles: dict[str, tuple[str, str]] = {}
+    for name in personas:
+        key = name.strip().lower()
+        if key:
+            needles[key] = ("persona", name)
+    for name in presets:
+        key = name.strip().lower()
+        if key:
+            needles[key] = ("preset", name)
+    ordered_needles = sorted(
+        ((key, kind, original) for key, (kind, original) in needles.items()),
+        key=lambda item: (-len(item[0]), item[0]),
+    )
+    if not ordered_needles:
+        return extra_source, aspect_ratio, resolution, [], [], [], [], []
+
+    skip = {name.strip().lower() for name in skip_names or [] if str(name).strip()}
+    lowered = extra_source.lower()
+    preset_prompts: list[str] = []
+    persona_prompts: list[str] = []
+    matched_presets: list[str] = []
+    matched_personas: list[str] = []
+    persona_images: list[tuple[str, str]] = []
+    leftover_chars: list[str] = []
+    index = 0
+    length = len(extra_source)
+    while index < length:
+        found: tuple[str, str, int] | None = None
+        for key, kind, original in ordered_needles:
+            end = index + len(key)
+            if end > length or lowered[index:end] != key:
+                continue
+            if not _ascii_token_boundary_ok(extra_source, index, end):
+                continue
+            found = (kind, original, end)
+            break
+        if found is None:
+            leftover_chars.append(extra_source[index])
+            index += 1
+            continue
+
+        kind, original, end = found
+        if original.lower() in skip:
+            index = end
+            continue
+        skip.add(original.lower())
+        if kind == "preset":
+            preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
+                presets[original],
+                aspect_ratio,
+                resolution,
+            )
+            if preset_prompt:
+                preset_prompts.append(preset_prompt)
+            matched_presets.append(original)
+        else:
+            persona = personas[original]
+            persona_prompt = persona.prompt.strip()
+            if persona_prompt:
+                persona_prompts.append(persona_prompt)
+            if persona.image:
+                persona_images.append((original, persona.image))
+            matched_personas.append(original)
+        index = end
+
+    extra = extra_source
+    if matched_presets or matched_personas:
+        extra = " ".join("".join(leftover_chars).split())
+    return (
+        extra,
+        aspect_ratio,
+        resolution,
+        preset_prompts,
+        persona_prompts,
+        matched_presets,
+        matched_personas,
+        persona_images,
+    )
+
+
 def parse_preset_prompt(
     preset_content: Any,
     aspect_ratio: str,
@@ -214,6 +371,7 @@ class ConfigTemplateStoreMixin:
 __all__ = (
     "build_generation_prompt",
     "ConfigTemplateStoreMixin",
+    "extract_templates_from_prompt",
     "find_named_entry",
     "format_template_summary",
     "normalize_name_items",

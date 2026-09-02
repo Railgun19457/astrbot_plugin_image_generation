@@ -16,6 +16,7 @@ from astrbot.core.astr_agent_context import AstrAgentContext
 
 from ..config.templates import (
     build_generation_prompt,
+    extract_templates_from_prompt,
     find_named_entry,
     format_template_summary,
     normalize_name_items as _normalize_name_items,
@@ -335,7 +336,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "生图时使用的额外提示词。设置 preset 或 persona 时可留空。",
+                    "description": "生图时使用的额外提示词。设置 preset 或 persona 时可留空。开启提示词正文匹配后，正文中出现的已配置名称才会自动应用。",
                 },
                 "preset": {
                     "type": "string",
@@ -411,6 +412,29 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
         )
         if error:
             return error
+        if plugin.config_manager.match_templates_in_prompt_body:
+            (
+                prompt,
+                aspect_ratio,
+                resolution,
+                extra_preset_prompts,
+                extra_persona_prompts,
+                extra_presets,
+                extra_personas,
+                extra_persona_images,
+            ) = extract_templates_from_prompt(
+                prompt,
+                plugin.config_manager.prompt_body_presets(),
+                plugin.config_manager.prompt_body_personas(),
+                aspect_ratio=str(aspect_ratio),
+                resolution=str(resolution),
+                skip_names=[*matched_presets, *matched_personas],
+            )
+            preset_prompts.extend(extra_preset_prompts)
+            persona_prompts.extend(extra_persona_prompts)
+            matched_presets.extend(extra_presets)
+            matched_personas.extend(extra_personas)
+            persona_images.extend(extra_persona_images)
         prompt = build_generation_prompt(
             preset_prompts=preset_prompts,
             persona_prompts=persona_prompts,

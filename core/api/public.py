@@ -30,6 +30,7 @@ from ..generation.reference_collector import (
 from ..tasks.ids import new_task_id
 from ..config.templates import (
     build_generation_prompt,
+    extract_templates_from_prompt,
     find_named_entry,
     format_template_summary,
     normalize_name_items,
@@ -565,10 +566,35 @@ class ImageGenerationPublicAPI:
                 persona_images.append((matched_persona, persona.image))
             matched_personas.append(matched_persona)
 
+        extra_prompt = str(prompt or "").strip()
+        if config_manager.match_templates_in_prompt_body:
+            (
+                extra_prompt,
+                aspect_ratio,
+                resolution,
+                extra_preset_prompts,
+                extra_persona_prompts,
+                extra_presets,
+                extra_personas,
+                extra_persona_images,
+            ) = extract_templates_from_prompt(
+                extra_prompt,
+                config_manager.prompt_body_presets(),
+                config_manager.prompt_body_personas(),
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                skip_names=[*matched_presets, *matched_personas],
+            )
+            preset_prompts.extend(extra_preset_prompts)
+            persona_prompts.extend(extra_persona_prompts)
+            matched_presets.extend(extra_presets)
+            matched_personas.extend(extra_personas)
+            persona_images.extend(extra_persona_images)
+
         final_prompt = build_generation_prompt(
             preset_prompts=preset_prompts,
             persona_prompts=persona_prompts,
-            extra_prompt=str(prompt or ""),
+            extra_prompt=extra_prompt,
         )
         return (
             final_prompt,

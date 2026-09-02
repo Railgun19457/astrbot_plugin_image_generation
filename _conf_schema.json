@@ -1640,9 +1640,19 @@
   },
   "prompt_templates": {
     "description": "提示词模板",
-    "hint": "集中配置预设提示词和人设模板；可通过 /预设 查看，通过 /生图 按名称使用。",
+    "hint": "集中配置预设提示词和人设模板；可通过 /预设 查看，通过 /生图 按名称使用。默认只从提示词开头连续匹配名称。",
     "type": "object",
     "items": {
+      "prompt_body_template_match": {
+        "description": "提示词正文匹配",
+        "hint": "默认关闭，保持仅从提示词开头连续词匹配。勾选后才在提示词正文中匹配对应名称；可只匹配人设、只匹配预设，或两者都匹配。",
+        "type": "list",
+        "options": [
+          "预设",
+          "人设"
+        ],
+        "default": []
+      },
       "presets": {
         "description": "预设提示词",
         "hint": "每项格式为“名称:提示词”；也支持 JSON 配置 prompt、aspect_ratio、resolution 和 description。",
@@ -1658,7 +1668,7 @@
       },
       "personas": {
         "description": "人设模板",
-        "hint": "配置固定人设描述和参考图；使用 /生图 <人设名称> [额外提示词] 时自动应用。",
+        "hint": "配置固定人设描述和参考图；/生图 开头名称或显式人设参数命中时自动应用。开启“提示词正文匹配”后也可在正文中匹配。",
         "type": "template_list",
         "default": [],
         "templates": {
@@ -1670,7 +1680,7 @@
             "items": {
               "persona_name": {
                 "description": "人设名称",
-                "hint": "用于 /生图 指令匹配。",
+                "hint": "用于 /生图 开头名称、显式人设参数，以及可选的提示词正文匹配。",
                 "type": "string"
               },
               "persona_prompt": {

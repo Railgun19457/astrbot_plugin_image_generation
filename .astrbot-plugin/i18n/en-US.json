@@ -979,21 +979,21 @@
     },
     "prompt_templates": {
       "description": "Prompt templates",
-      "hint": "Centrally configure preset prompts and persona templates. View them with /预设 and use them by name with /生图.",
+      "hint": "Centrally configure preset prompts and persona templates. View them with /预设 and use them by name with /生图. By default, only leading consecutive names are matched.",
       "presets": {
         "description": "Preset prompts",
         "hint": "Each item uses the format \"name:prompt\". JSON objects with prompt, aspect_ratio, resolution, and description are also supported."
       },
       "personas": {
         "description": "Persona templates",
-        "hint": "Configure reusable persona descriptions and reference images. When using /生图 <persona name> [extra prompt], the persona is applied automatically.",
+        "hint": "Configure reusable persona descriptions and reference images. Applied from leading /生图 names or explicit persona parameters. Also matched in the prompt body when body matching is enabled.",
         "templates": {
           "persona": {
             "name": "Persona",
             "hint": "Reusable persona template.",
             "persona_name": {
               "description": "Persona name",
-              "hint": "Used for matching in the /生图 command."
+              "hint": "Used to match leading /生图 names, explicit persona parameters, and optional prompt-body matching."
             },
             "persona_prompt": {
               "description": "Persona description",
@@ -1005,6 +1005,14 @@
             }
           }
         }
+      },
+      "prompt_body_template_match": {
+        "description": "Match names in prompt body",
+        "hint": "Disabled by default so only leading consecutive tokens are matched. Select presets, personas, or both to scan names in the prompt body.",
+        "labels": [
+          "Preset",
+          "Persona"
+        ]
       }
     },
     "generation_task_history": {
