@@ -226,9 +226,7 @@ class OpenAIAdapter(BaseImageAdapter):
             payload["size"] = size
         # OpenAI models do not support the plugin resolution setting; quality is separate.
         if gpt:
-            output_format = str(
-                self.config.extra.get("output_format") or "png"
-            ).lower()
+            output_format = str(self.config.extra.get("output_format") or "png").lower()
             payload["output_format"] = (
                 output_format if output_format in {"png", "jpeg", "webp"} else "png"
             )
@@ -319,7 +317,7 @@ class OpenAIAdapter(BaseImageAdapter):
                     except Exception as exc:
                         duration = time.time() - download_start
                         detail = safe_log_error_body(exc) or type(exc).__name__
-                        download_error = f"{type(exc).__name__}: {exc!r}"
+                        download_error = detail
                         logger.warning(
                             f"{prefix} 图片下载失败: 尝试={attempt}/3, "
                             f"耗时={duration:.2f}秒, 错误={detail}, "
