@@ -298,6 +298,17 @@
             "hint": "文生图默认开启 SSE。部分兼容站点不支持流式时可关闭，改为普通 JSON 响应。",
             "type": "bool",
             "default": true
+          },
+          "output_format": {
+            "description": "GPT Image 输出格式",
+            "hint": "PNG 保留无损质量；JPEG 响应更小，适合会截断大型 Base64 响应的中转接口。仅影响 GPT Image 系列。",
+            "type": "string",
+            "options": [
+              "png",
+              "jpeg",
+              "webp"
+            ],
+            "default": "png"
           }
         }
       },
