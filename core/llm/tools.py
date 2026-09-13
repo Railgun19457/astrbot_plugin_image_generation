@@ -23,7 +23,9 @@ from ..config.templates import (
     parse_preset_prompt,
 )
 from ..generation.reference_collector import (
+    ContextReferenceImageNotFoundError,
     collect_tool_reference_images,
+    extract_latest_user_context_images,
     normalize_string_items as _normalize_string_items,
 )
 from ..shared.constants import SUPPORTED_ASPECT_RATIOS, SUPPORTED_RESOLUTIONS
@@ -33,7 +35,7 @@ from ..shared.logging import (
     safe_log_error_body,
     safe_log_text,
 )
-from ..shared.types import ImageCapability
+from ..shared.types import ImageCapability, ImageData
 from ..tasks.ids import new_task_id
 from ..tasks.models import GenerationTaskCreationError
 
@@ -185,6 +187,9 @@ async def _start_generation_task(
     aspect_ratio: str,
     resolution: str,
     reference_images: Any = None,
+    context_images: Any = None,
+    cached_context_images: list[ImageData] | None = None,
+    use_context_images: bool = False,
     avatar_references: Any = None,
     persona_images: list[tuple[str, str]] | None = None,
     preset_or_persona: str | None = None,
@@ -196,6 +201,10 @@ async def _start_generation_task(
     """Validate request, collect references, and schedule image generation."""
     if not plugin.generator or not plugin.generator.adapter:
         return "❌ 生图生成器未初始化"
+
+    capabilities = plugin.generator.adapter.get_capabilities()
+    if use_context_images and not (capabilities & ImageCapability.IMAGE_TO_IMAGE):
+        return "❌ 当前模型不支持图生图，无法按要求修改图片"
 
     image_count = plugin.normalize_image_count(image_count)
     is_usage_limit_admin = plugin.is_usage_limit_admin(event)
@@ -242,22 +251,28 @@ async def _start_generation_task(
 
     task_id = new_task_id()
     try:
-        capabilities = plugin.generator.adapter.get_capabilities()
         try:
             images_data = await collect_tool_reference_images(
                 plugin.image_processor,
                 event,
                 capabilities=capabilities,
                 reference_images=reference_images,
+                context_images=context_images,
+                cached_context_images=cached_context_images,
+                use_context_images=use_context_images,
                 avatar_references=avatar_references,
                 persona_images=persona_images,
                 task_id=task_id,
             )
+        except ContextReferenceImageNotFoundError:
+            raise
         except Exception as exc:
             logger.error(
                 f"{log_prefix('LLMTool', task_id)} 处理参考图失败: {safe_log_error_body(exc, 200)}",
                 exc_info=True,
             )
+            if use_context_images:
+                raise ContextReferenceImageNotFoundError from exc
             images_data = []
 
         reference_image_count = len(images_data)
@@ -294,6 +309,14 @@ async def _start_generation_task(
         raise
     except GenerationTaskCreationError as exc:
         return f"❌ 生图任务提交失败: {exc.message} ({exc.code})"
+    except ContextReferenceImageNotFoundError:
+        if usage_reserved and not task_created:
+            plugin.usage_manager.release_reserved_usage(
+                event.unified_msg_origin,
+                is_admin=is_usage_limit_admin,
+                count=image_count,
+            )
+        return "❌ 未找到可用的聊天图片，已取消改图任务；请重新发送或引用图片后再试"
     except Exception as exc:
         if usage_reserved and not task_created:
             plugin.usage_manager.release_reserved_usage(
@@ -329,6 +352,8 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
     description: str = (
         "使用生图模型生成或修改图片；支持普通生图、多预设、自拍、人像、头像和多个人设照片。"
         "当用户要求自拍/头像/人像/某个人设或角色出镜时，应优先填写 persona。"
+        "修改用户当前消息、引用消息或此前聊天中的图片时，必须将 use_context_images 设为 true；"
+        "插件会自行取得实际图片，不要只在 prompt 中描述‘参考图’。"
     )
     parameters: dict = Field(
         default_factory=lambda: {
@@ -373,6 +398,10 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
                     "type": "array",
                     "description": "可选。参考图列表，支持 http(s) 网络图片 URL；本地图片仅允许当前会话 workspace和AstrBot temp 目录。",
                     "items": {"type": "string"},
+                },
+                "use_context_images": {
+                    "type": "boolean",
+                    "description": "是否使用聊天中的图片作为改图参考。修改当前消息、引用消息、上一张图或近期聊天图片时必须设为 true；插件会自行取得图片，无需把图片 URL 复制到 reference_images。纯文生图设为 false。",
                 },
             },
             "required": [],
@@ -453,13 +482,75 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             logger.warning(f"{LOG} 工具调用上下文缺少事件。上下文类型: {type(context)}")
             return "❌ 无法获取当前消息上下文"
 
+        raw_use_context_images = kwargs.get("use_context_images")
+        if raw_use_context_images is None:
+            intent_text = f"{getattr(event, 'message_str', '')}\n{prompt}".casefold()
+            edit_markers = (
+                "edit the supplied",
+                "edit the provided",
+                "edit this image",
+                "edit this photo",
+                "modify this image",
+                "modify this photo",
+                "reference image",
+                "reference photo",
+                "supplied image",
+                "supplied photo",
+                "provided image",
+                "provided photo",
+                "改图",
+                "修改这张",
+                "编辑这张",
+                "参考图",
+                "原图",
+                "上一张",
+                "刚才那张",
+                "这张图",
+                "这张图片",
+            )
+            use_context_images = any(marker in intent_text for marker in edit_markers)
+        elif isinstance(raw_use_context_images, str):
+            use_context_images = raw_use_context_images.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        else:
+            use_context_images = bool(raw_use_context_images)
+
+        reference_images = normalize_string_items(kwargs.get("reference_images"))
+        context_references: list[str] = []
+        cached_context_images: list[ImageData] = []
+        if use_context_images:
+            context_references = extract_latest_user_context_images(
+                getattr(context, "messages", None)
+            )
+            if context_references:
+                logger.debug(
+                    f"{LOG} 已从聊天上下文选取最近一条用户消息中的 "
+                    f"{len(context_references)} 张参考图"
+                )
+            else:
+                logger.warning(f"{LOG} 已请求使用聊天上下文图片，但未找到可用图片")
+            cache_getter = getattr(plugin, "get_recent_context_images", None)
+            if callable(cache_getter):
+                cached_context_images = cache_getter(event.unified_msg_origin)
+                if cached_context_images:
+                    logger.debug(
+                        f"{LOG} 已从会话缓存取得 {len(cached_context_images)} 张参考图"
+                    )
+
         return await _start_generation_task(
             plugin,
             event,
             prompt=prompt,
             aspect_ratio=str(aspect_ratio),
             resolution=str(resolution),
-            reference_images=kwargs.get("reference_images"),
+            reference_images=reference_images,
+            context_images=context_references,
+            cached_context_images=cached_context_images,
+            use_context_images=use_context_images,
             avatar_references=kwargs.get("avatar_references"),
             persona_images=persona_images,
             preset_or_persona=preset_or_persona,
@@ -824,7 +915,11 @@ def adjust_tool_parameters(
             logger.debug(f"{LOG} 适配器不支持{label}，已从工具参数中移除")
 
     if not (capabilities & ImageCapability.IMAGE_TO_IMAGE):
-        for key in ("avatar_references", "reference_images"):
+        for key in (
+            "avatar_references",
+            "reference_images",
+            "use_context_images",
+        ):
             props.pop(key, None)
         logger.debug(f"{LOG} 适配器不支持参考图，已从工具参数中移除参考图相关参数")
 

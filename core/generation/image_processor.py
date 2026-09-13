@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import ntpath
 import os
@@ -232,7 +234,33 @@ class ImageProcessor:
 
             data: bytes | None = None
             source_url = url if self._is_network_url(url) else None
-            if local_path := self._resolve_local_path(url, workspace_dir=workspace_dir):
+            if url.lower().startswith("data:image/"):
+                header, separator, payload = url.partition(",")
+                declared_mime = header[5:].split(";", 1)[0].lower()
+                if (
+                    not separator
+                    or ";base64" not in header.lower()
+                    or declared_mime not in ALLOWED_IMAGE_MIME_TYPES
+                ):
+                    logger.warning(f"{LOG} 不支持的图片 Data URL")
+                    return None
+                max_bytes = self._max_image_size_mb * 1024 * 1024
+                max_encoded_length = ((max_bytes + 2) // 3) * 4 + 8
+                if len(payload) > max_encoded_length:
+                    logger.warning(
+                        f"{LOG} 图片超过大小限制 ({self._max_image_size_mb}MB)"
+                    )
+                    return None
+                try:
+                    data = base64.b64decode(payload, validate=True)
+                except (binascii.Error, ValueError):
+                    logger.warning(f"{LOG} 图片 Data URL Base64 无效")
+                    return None
+                source_url = None
+            elif local_path := self._resolve_local_path(
+                url,
+                workspace_dir=workspace_dir,
+            ):
                 source_url = None
                 with open(local_path, "rb") as f:
                     data = f.read()
