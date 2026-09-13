@@ -52,6 +52,16 @@ class OpenAIAdapter(BaseImageAdapter):
         start_time = time.time()
         prefix = self._get_log_prefix(request.task_id)
 
+        if request.resolution and request.resolution != UNSPECIFIED_OPTION:
+            self._log_debug_json(
+                "尺寸参数处理",
+                {
+                    "resolution": request.resolution,
+                    "处理": "已忽略：OpenAI Images 不支持插件分辨率参数",
+                },
+                request.task_id,
+            )
+
         is_gpt = self._is_gpt_image_model()
         use_edit = bool(request.images) and is_gpt
         if request.images and not is_gpt:
@@ -104,6 +114,7 @@ class OpenAIAdapter(BaseImageAdapter):
                 url,
                 form_fields=["model", "prompt", "n", "size", "image[]"],
             )
+            self._log_debug_json("请求表单尺寸", {"size": size}, request.task_id)
 
         try:
             async with session.post(
