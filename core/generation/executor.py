@@ -115,6 +115,10 @@ class GenerationExecutor:
 
         capabilities = self.generator.adapter.get_capabilities()
         task_log = log_prefix("Task", task_id)
+        logger.debug(
+            f"{task_log} 请求尺寸: 宽高比={safe_log_text(aspect_ratio)}，"
+            f"分辨率={safe_log_text(resolution)}"
+        )
         try:
             image_count = int(image_count)
         except (TypeError, ValueError):
