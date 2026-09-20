@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,10 @@ from .core.config.manager import (
     ConfigManager,
 )
 from .core.generation.executor import GenerationExecutor
-from .core.generation.options import parse_generation_options
+from .core.generation.options import (
+    parse_generation_options,
+    split_trailing_count_token,
+)
 from .core.tasks.models import (
     GenerationTaskCreationError,
     GenerationTaskRecord,
@@ -442,18 +444,10 @@ class ImageGenerationPlugin(Star):
         if not raw_prompt:
             return default_count, ""
 
-        tokens = raw_prompt.split()
-        # A spaced ratio ("16 : 9") ends in a number, but is not a count.
-        ratio_denominator = len(tokens) > 1 and tokens[-2].endswith((":", "："))
-        # Keep an invalid numeric option ("分辨率 2") for option validation.
-        option_value = re.search(
-            r"(?:宽高比|比例|画幅|分辨率)\s*(?:为|是|[:：=])?\s*$",
-            " ".join(tokens[:-1]),
-        )
-        if tokens[-1].isdecimal() and not ratio_denominator and not option_value:
-            return self.normalize_image_count(tokens[-1]), " ".join(tokens[:-1]).strip()
-
-        return default_count, raw_prompt
+        remainder, count_token = split_trailing_count_token(raw_prompt)
+        if count_token is None:
+            return default_count, raw_prompt
+        return self.normalize_image_count(count_token), remainder
 
     def _parse_command_prompt_templates(
         self,
