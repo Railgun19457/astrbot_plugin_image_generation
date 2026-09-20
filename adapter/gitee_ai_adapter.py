@@ -176,6 +176,7 @@ class GiteeAIAdapter(BaseImageAdapter):
         add_field("prompt", request.prompt)
         if size := self._resolve_size(request):
             add_field("size", size)
+        self._log_debug_json("请求表单尺寸", {"size": size}, request.task_id)
         add_field("n", "1")
 
         for index, image in enumerate(request.images[:1], start=1):
