@@ -24,6 +24,10 @@ from .core.config.manager import (
 )
 from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
+from .core.generation.options import (
+    parse_generation_options,
+    split_trailing_count_token,
+)
 from .core.tasks.models import (
     GenerationTaskCreationError,
     GenerationTaskRecord,
@@ -478,11 +482,10 @@ class ImageGenerationPlugin(Star):
         if not raw_prompt:
             return default_count, ""
 
-        tokens = raw_prompt.split()
-        if tokens[-1].isdecimal():
-            return self.normalize_image_count(tokens[-1]), " ".join(tokens[:-1]).strip()
-
-        return default_count, raw_prompt
+        remainder, count_token = split_trailing_count_token(raw_prompt)
+        if count_token is None:
+            return default_count, raw_prompt
+        return self.normalize_image_count(count_token), remainder
 
     def _parse_command_prompt_templates(
         self,
@@ -776,6 +779,11 @@ class ImageGenerationPlugin(Star):
             return
 
         image_count, prompt = self._parse_command_image_count(raw_prompt)
+        options = parse_generation_options(prompt)
+        if options.error:
+            yield event.plain_result(f"❌ {options.error}")
+            return
+        prompt = options.prompt
 
         aspect_ratio = self.config_manager.default_aspect_ratio
         resolution = self.config_manager.default_resolution
@@ -787,6 +795,10 @@ class ImageGenerationPlugin(Star):
             matched_personas,
             persona_images,
         ) = self._parse_command_prompt_templates(prompt, aspect_ratio, resolution)
+        if options.aspect_ratio is not None:
+            aspect_ratio = options.aspect_ratio
+        if options.resolution is not None:
+            resolution = options.resolution
         preset_or_persona, preset_label = format_template_summary(
             matched_presets,
             matched_personas,
