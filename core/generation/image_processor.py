@@ -400,6 +400,29 @@ class ImageProcessor:
 
         return str(leading_component.qq).strip() == bot_self_id
 
+    def collect_event_image_urls(self, event: AstrMessageEvent) -> list[str]:
+        """Return deduplicated image URLs from the current and replied message chain."""
+        references: list[str] = []
+        if not event.message_obj or not event.message_obj.message:
+            return references
+
+        components = list(event.message_obj.message)
+        for component in components:
+            image_components = []
+            if isinstance(component, Comp.Image):
+                image_components.append(component)
+            elif isinstance(component, Comp.Reply) and component.chain:
+                image_components.extend(
+                    sub_comp
+                    for sub_comp in component.chain
+                    if isinstance(sub_comp, Comp.Image)
+                )
+            for image_component in image_components:
+                url = image_component.url or image_component.file
+                if url and str(url).strip():
+                    references.append(str(url).strip())
+        return list(dict.fromkeys(references))
+
     async def fetch_images_from_event(
         self,
         event: AstrMessageEvent,

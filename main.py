@@ -215,8 +215,12 @@ class ImageGenerationPlugin(Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
-        """Cache current request images before other plugins sanitize LLM context."""
-        references = list(dict.fromkeys(req.image_urls or []))
+        """Cache current message images before other plugins sanitize LLM context.
+
+        Read the event message chain because image-captioning plugins may clear
+        ``req.image_urls`` before this hook runs.
+        """
+        references = self.image_processor.collect_event_image_urls(event)
         if not references:
             return
 

@@ -483,33 +483,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             return "❌ 无法获取当前消息上下文"
 
         raw_use_context_images = kwargs.get("use_context_images")
-        if raw_use_context_images is None:
-            intent_text = f"{getattr(event, 'message_str', '')}\n{prompt}".casefold()
-            edit_markers = (
-                "edit the supplied",
-                "edit the provided",
-                "edit this image",
-                "edit this photo",
-                "modify this image",
-                "modify this photo",
-                "reference image",
-                "reference photo",
-                "supplied image",
-                "supplied photo",
-                "provided image",
-                "provided photo",
-                "改图",
-                "修改这张",
-                "编辑这张",
-                "参考图",
-                "原图",
-                "上一张",
-                "刚才那张",
-                "这张图",
-                "这张图片",
-            )
-            use_context_images = any(marker in intent_text for marker in edit_markers)
-        elif isinstance(raw_use_context_images, str):
+        if isinstance(raw_use_context_images, str):
             use_context_images = raw_use_context_images.strip().lower() in {
                 "1",
                 "true",
