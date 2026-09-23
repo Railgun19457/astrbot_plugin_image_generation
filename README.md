@@ -12,7 +12,7 @@
 
 - 多供应商配置：一个插件中配置多个生图服务，每个供应商可独立设置 API Key、Base URL、代理、模型列表和模型能力。
 - 多适配器支持：内置 Gemini、OpenAI Chat、OpenAI Images、火山方舟、Gitee AI、硅基流动、Agnes AI、Jimeng2API、Grok 和自定义 HTTP 接口。
-- 文生图与图生图：自动收集消息图片、引用消息图片、@ 用户头像和人设参考图；模型不支持图生图时会自动忽略参考图。
+- 文生图与图生图：自动收集消息图片、引用消息图片、@ 用户头像和人设参考图；LLM 改图时可按需取用当前消息、引用消息或近期聊天中的图片，模型不支持图生图时会自动忽略参考图。
 - 模型动态切换：通过指令查看和切换模型。
 - 多图任务：单个任务可生成多张图片，支持请求级并发、任务级队列和分批发送。
 - LLM 工具调用：可作为 LLM 工具自动生图、查询预设/人设、管理生图任务，也可按配置启用预设编辑工具。
@@ -181,7 +181,7 @@
 | `manage_image_tasks`  | 生图任务工具 | 查看当前会话任务列表、查看任务详情、取消仍在进行的任务。              |
 | `edit_image_presets`  | 预设编辑工具 | 创建或删除预设；默认不启用，开启后 AI 可修改预设配置，但不会编辑人设。 |
 
-LLM 生图工具支持 `preset`、`persona`、`aspect_ratio`、`resolution`、`image_count`、`avatar_references` 和 `reference_images` 参数。`avatar_references` 可填写 `self`、`sender` 或用户 ID；`reference_images` 支持网络图片 URL，本地路径仅允许当前会话 workspace、AstrBot temp 目录和本插件数据目录。
+LLM 生图工具支持 `preset`、`persona`、`aspect_ratio`、`resolution`、`image_count`、`avatar_references`、`reference_images` 和 `use_context_images` 参数。`avatar_references` 可填写 `self`、`sender` 或用户 ID；`reference_images` 支持网络图片 URL，本地路径仅允许当前会话 workspace、AstrBot temp 目录和本插件数据目录。仅在 LLM 改图显式传入 `use_context_images=true` 时，插件才会按需取得当前消息、引用消息或近期聊天中的参考图，纯文生图不会自动取图。上一条独立消息中的图片会短期缓存在内存中，即使其他插件将历史图片替换成文字摘要也仍可用于改图。未找到可用图片时会取消任务，不会降级为纯文生图。
 
 ## 任务体系
 

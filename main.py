@@ -9,6 +9,7 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.star_tools import StarTools
@@ -21,6 +22,7 @@ from .core.config.manager import (
     LLM_TOOL_TASK_MANAGEMENT,
     ConfigManager,
 )
+from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
 from .core.generation.options import (
     parse_generation_options,
@@ -108,6 +110,7 @@ class ImageGenerationPlugin(Star):
             str(self.data_dir),
             allowed_local_base_dirs=[str(self.astrbot_temp_dir)],
         )
+        self.recent_context_image_cache = RecentContextImageCache()
 
         # Initialize task management.
         self.task_manager = TaskManager(
@@ -192,6 +195,7 @@ class ImageGenerationPlugin(Star):
     async def terminate(self):
         """Run when the plugin is unloaded."""
         try:
+            self.recent_context_image_cache.clear()
             await self.task_manager.cancel_all()
             if self.generator:
                 await self.generator.close()
@@ -200,6 +204,44 @@ class ImageGenerationPlugin(Star):
             logger.error(f"{LOG} 卸载清理出错: {exc}", exc_info=True)
 
     # Internal helpers.
+
+    def get_recent_context_images(self, unified_msg_origin: str) -> list[ImageData]:
+        """Return recent validated images cached for one conversation."""
+        return self.recent_context_image_cache.get(unified_msg_origin)
+
+    @filter.on_llm_request(priority=230000)
+    async def cache_current_request_images(
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
+    ) -> None:
+        """Cache current message images before other plugins sanitize LLM context.
+
+        Read the event message chain because image-captioning plugins may clear
+        ``req.image_urls`` before this hook runs.
+        """
+        references = self.image_processor.collect_event_image_urls(event)
+        if not references:
+            return
+
+        workspace_dir = self.image_processor.workspace_dir_for_origin(
+            event.unified_msg_origin
+        )
+        images: list[ImageData] = []
+        for reference in references:
+            if image := await self.image_processor.download_image(
+                reference,
+                workspace_dir=workspace_dir,
+            ):
+                images.append(image)
+        if not images:
+            return
+
+        self.recent_context_image_cache.put(event.unified_msg_origin, images)
+        logger.debug(
+            f"{LOG} 已缓存当前会话最近一条图片消息: "
+            f"用户={mask_sensitive(event.unified_msg_origin)}，图片={len(images)}张"
+        )
 
     def _register_llm_tools(self) -> None:
         """Register enabled LLM tools."""
