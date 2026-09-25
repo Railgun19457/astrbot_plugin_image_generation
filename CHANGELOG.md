@@ -1,5 +1,5 @@
 ### 更新日志
-- **Unreleased**
+- **v1.6.7-2026-09-25**
   - 合并 [PR #67](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/67)（@Sh4ck1e）：LLM 改图工具新增聊天上下文图片选择，仅当显式传入 `use_context_images=true` 时取图，纯文生图不会自动取图。
   - 参考图优先级为当前消息或引用消息中的图片、同一发送者最近缓存的图片、最近 20 条历史中最后一条带图的用户消息。未找到可用图片时取消任务并退回额度，不会静默降级为纯文生图。
   - 历史图片同时支持 AstrBot 落盘的字符串 `image_url`、标准的 `{"url": "..."}` 结构，以及 Base64 Data URL。
