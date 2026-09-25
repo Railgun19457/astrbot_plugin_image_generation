@@ -9,6 +9,7 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.star_tools import StarTools
@@ -21,6 +22,7 @@ from .core.config.manager import (
     LLM_TOOL_TASK_MANAGEMENT,
     ConfigManager,
 )
+from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
 from .core.generation.options import (
     parse_generation_options,
@@ -108,6 +110,7 @@ class ImageGenerationPlugin(Star):
             str(self.data_dir),
             allowed_local_base_dirs=[str(self.astrbot_temp_dir)],
         )
+        self.recent_context_image_cache = RecentContextImageCache()
 
         # Initialize task management.
         self.task_manager = TaskManager(
@@ -192,6 +195,7 @@ class ImageGenerationPlugin(Star):
     async def terminate(self):
         """Run when the plugin is unloaded."""
         try:
+            self.recent_context_image_cache.clear()
             await self.task_manager.cancel_all()
             if self.generator:
                 await self.generator.close()
@@ -200,6 +204,65 @@ class ImageGenerationPlugin(Star):
             logger.error(f"{LOG} 卸载清理出错: {exc}", exc_info=True)
 
     # Internal helpers.
+
+    def context_image_cache_key(self, event: AstrMessageEvent) -> str:
+        """Return a sender-scoped cache key for one conversation."""
+        sender_id = ""
+        if hasattr(event, "get_sender_id"):
+            sender_id = str(event.get_sender_id() or "").strip()
+        if sender_id:
+            return f"{event.unified_msg_origin}\n{sender_id}"
+        return event.unified_msg_origin
+
+    def get_recent_context_images(self, event: AstrMessageEvent) -> list[ImageData]:
+        """Return recent validated images cached for one sender."""
+        return self.recent_context_image_cache.get(self.context_image_cache_key(event))
+
+    @filter.on_llm_request(priority=230000)
+    async def cache_current_request_images(
+        self,
+        event: AstrMessageEvent,
+        req: ProviderRequest,
+    ) -> None:
+        """Cache images attached directly to the current message.
+
+        Read the event message chain because image-captioning plugins may clear
+        ``req.image_urls`` before this hook runs. Replied images are excluded so
+        a text reply cannot replace the sender's previously cached image.
+        """
+        references = self.image_processor.collect_direct_event_image_urls(event)
+        if not references and req.image_urls:
+            # Some runners replace message images with bare base64 before hooks.
+            references = [
+                reference.strip()
+                for reference in req.image_urls
+                if isinstance(reference, str) and reference.strip()
+            ]
+        if not references:
+            return
+
+        workspace_dir = self.image_processor.workspace_dir_for_origin(
+            event.unified_msg_origin
+        )
+        images: list[ImageData] = []
+        for reference in references:
+            if image := await self.image_processor.download_image(
+                reference,
+                workspace_dir=workspace_dir,
+            ):
+                images.append(image)
+        if not images:
+            return
+
+        self.recent_context_image_cache.put(
+            self.context_image_cache_key(event),
+            images,
+        )
+        logger.debug(
+            f"{LOG} 已缓存当前发送者最近一条图片消息: "
+            f"用户={mask_sensitive(self.context_image_cache_key(event))}，"
+            f"图片={len(images)}张"
+        )
 
     def _register_llm_tools(self) -> None:
         """Register enabled LLM tools."""

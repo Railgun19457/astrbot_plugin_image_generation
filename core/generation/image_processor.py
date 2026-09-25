@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import ntpath
 import os
@@ -232,7 +234,20 @@ class ImageProcessor:
 
             data: bytes | None = None
             source_url = url if self._is_network_url(url) else None
-            if local_path := self._resolve_local_path(url, workspace_dir=workspace_dir):
+            if url.lower().startswith("data:image/"):
+                data = self._decode_data_image_url(url)
+                if data is None:
+                    return None
+                source_url = None
+            elif url.lower().startswith("base64://"):
+                data = self._decode_base64_payload(url[len("base64://") :])
+                if data is None:
+                    return None
+                source_url = None
+            elif local_path := self._resolve_local_path(
+                url,
+                workspace_dir=workspace_dir,
+            ):
                 source_url = None
                 with open(local_path, "rb") as f:
                     data = f.read()
@@ -265,6 +280,32 @@ class ImageProcessor:
                 f"{LOG} 获取图片失败: {safe_log_url(url)} ({safe_log_error_body(exc)})"
             )
         return None
+
+    def _decode_data_image_url(self, url: str) -> bytes | None:
+        """Decode a size-limited ``data:image/...;base64`` payload."""
+        header, separator, payload = url.partition(",")
+        declared_mime = header[5:].split(";", 1)[0].lower()
+        if (
+            not separator
+            or ";base64" not in header.lower()
+            or declared_mime not in ALLOWED_IMAGE_MIME_TYPES
+        ):
+            logger.warning(f"{LOG} 不支持的图片 Data URL")
+            return None
+        return self._decode_base64_payload(payload)
+
+    def _decode_base64_payload(self, payload: str) -> bytes | None:
+        """Decode one image payload without accepting oversized input."""
+        max_bytes = self._max_image_size_mb * 1024 * 1024
+        max_encoded_length = ((max_bytes + 2) // 3) * 4 + 8
+        if len(payload) > max_encoded_length:
+            logger.warning(f"{LOG} 图片超过大小限制 ({self._max_image_size_mb}MB)")
+            return None
+        try:
+            return base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError):
+            logger.warning(f"{LOG} 图片 Base64 无效")
+            return None
 
     def validate_image_data(
         self,
@@ -371,6 +412,64 @@ class ImageProcessor:
             return False
 
         return str(leading_component.qq).strip() == bot_self_id
+
+    def collect_event_image_urls(self, event: AstrMessageEvent) -> list[str]:
+        """Return deduplicated image URLs from the current and replied message chain."""
+        references: list[str] = []
+        if not event.message_obj or not event.message_obj.message:
+            return references
+
+        components = list(event.message_obj.message)
+        for component in components:
+            image_components = []
+            if isinstance(component, Comp.Image):
+                image_components.append(component)
+            elif isinstance(component, Comp.Reply) and component.chain:
+                image_components.extend(
+                    sub_comp
+                    for sub_comp in component.chain
+                    if isinstance(sub_comp, Comp.Image)
+                )
+            for image_component in image_components:
+                url = image_component.url or image_component.file
+                if url and str(url).strip():
+                    references.append(str(url).strip())
+        return list(dict.fromkeys(references))
+
+    def collect_direct_event_image_urls(self, event: AstrMessageEvent) -> list[str]:
+        """Return image URLs attached directly to the current message."""
+        references: list[str] = []
+        if not event.message_obj or not event.message_obj.message:
+            return references
+
+        for component in event.message_obj.message:
+            if not isinstance(component, Comp.Image):
+                continue
+            url = component.url or component.file
+            if url and str(url).strip():
+                references.append(str(url).strip())
+        return list(dict.fromkeys(references))
+
+    async def fetch_message_images_from_event(
+        self,
+        event: AstrMessageEvent,
+    ) -> list[ImageData]:
+        """Download images attached to the current message and its replies.
+
+        Mentioned-user avatars are intentionally excluded. Callers that want
+        avatars collect them through explicit avatar references.
+        """
+        images_data: list[ImageData] = []
+        workspace_dir = self.workspace_dir_for_origin(
+            getattr(event, "unified_msg_origin", None)
+        )
+        for reference in self.collect_event_image_urls(event):
+            if image := await self.download_image(
+                reference,
+                workspace_dir=workspace_dir,
+            ):
+                images_data.append(image)
+        return images_data
 
     async def fetch_images_from_event(
         self,
