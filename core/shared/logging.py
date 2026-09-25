@@ -353,8 +353,11 @@ def safe_log_url(value: object, limit: int = 80) -> str:
     if not text:
         return ""
 
-    if text.startswith("data:"):
+    lowered = text.lower()
+    if lowered.startswith("data:"):
         return f"data-url({len(text)} chars)"
+    if lowered.startswith("base64://"):
+        return f"base64-url({len(text)} chars)"
 
     parsed = urlparse(text)
     if parsed.scheme in {"http", "https"}:

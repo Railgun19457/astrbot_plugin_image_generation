@@ -205,9 +205,18 @@ class ImageGenerationPlugin(Star):
 
     # Internal helpers.
 
-    def get_recent_context_images(self, unified_msg_origin: str) -> list[ImageData]:
-        """Return recent validated images cached for one conversation."""
-        return self.recent_context_image_cache.get(unified_msg_origin)
+    def context_image_cache_key(self, event: AstrMessageEvent) -> str:
+        """Return a sender-scoped cache key for one conversation."""
+        sender_id = ""
+        if hasattr(event, "get_sender_id"):
+            sender_id = str(event.get_sender_id() or "").strip()
+        if sender_id:
+            return f"{event.unified_msg_origin}\n{sender_id}"
+        return event.unified_msg_origin
+
+    def get_recent_context_images(self, event: AstrMessageEvent) -> list[ImageData]:
+        """Return recent validated images cached for one sender."""
+        return self.recent_context_image_cache.get(self.context_image_cache_key(event))
 
     @filter.on_llm_request(priority=230000)
     async def cache_current_request_images(
@@ -215,12 +224,20 @@ class ImageGenerationPlugin(Star):
         event: AstrMessageEvent,
         req: ProviderRequest,
     ) -> None:
-        """Cache current message images before other plugins sanitize LLM context.
+        """Cache images attached directly to the current message.
 
         Read the event message chain because image-captioning plugins may clear
-        ``req.image_urls`` before this hook runs.
+        ``req.image_urls`` before this hook runs. Replied images are excluded so
+        a text reply cannot replace the sender's previously cached image.
         """
-        references = self.image_processor.collect_event_image_urls(event)
+        references = self.image_processor.collect_direct_event_image_urls(event)
+        if not references and req.image_urls:
+            # Some runners replace message images with bare base64 before hooks.
+            references = [
+                reference.strip()
+                for reference in req.image_urls
+                if isinstance(reference, str) and reference.strip()
+            ]
         if not references:
             return
 
@@ -237,10 +254,14 @@ class ImageGenerationPlugin(Star):
         if not images:
             return
 
-        self.recent_context_image_cache.put(event.unified_msg_origin, images)
+        self.recent_context_image_cache.put(
+            self.context_image_cache_key(event),
+            images,
+        )
         logger.debug(
-            f"{LOG} 已缓存当前会话最近一条图片消息: "
-            f"用户={mask_sensitive(event.unified_msg_origin)}，图片={len(images)}张"
+            f"{LOG} 已缓存当前发送者最近一条图片消息: "
+            f"用户={mask_sensitive(self.context_image_cache_key(event))}，"
+            f"图片={len(images)}张"
         )
 
     def _register_llm_tools(self) -> None:

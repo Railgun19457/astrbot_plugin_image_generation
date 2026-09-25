@@ -55,6 +55,35 @@ def normalize_string_items(raw: Any) -> list[str]:
     return [item] if item else []
 
 
+def image_reference_from_part(part: Any) -> str | None:
+    """Extract one image reference from an OpenAI-style or AstrBot content part.
+
+    AstrBot persists ``ImageURLPart`` as ``{"image_url": "https://..."}``, while
+    assembled provider context uses ``{"image_url": {"url": "data:image/..."}}``.
+    """
+    part_type = (
+        part.get("type") if isinstance(part, dict) else getattr(part, "type", None)
+    )
+    if part_type != "image_url":
+        return None
+
+    image_url = (
+        part.get("image_url")
+        if isinstance(part, dict)
+        else getattr(part, "image_url", None)
+    )
+    if isinstance(image_url, dict):
+        image_url = image_url.get("url")
+    elif isinstance(image_url, str):
+        image_url = image_url.strip()
+    else:
+        image_url = getattr(image_url, "url", None)
+
+    if isinstance(image_url, str) and image_url.strip():
+        return image_url.strip()
+    return None
+
+
 def extract_latest_user_context_images(
     messages: Any,
     *,
@@ -99,30 +128,11 @@ def extract_latest_user_context_images(
         ):
             continue
 
-        references: list[str] = []
-        for part in content:
-            part_type = (
-                part.get("type")
-                if isinstance(part, dict)
-                else getattr(
-                    part,
-                    "type",
-                    None,
-                )
-            )
-            if part_type != "image_url":
-                continue
-            image_url = (
-                part.get("image_url")
-                if isinstance(part, dict)
-                else getattr(part, "image_url", None)
-            )
-            if isinstance(image_url, dict):
-                image_url = image_url.get("url")
-            elif not isinstance(image_url, str):
-                image_url = getattr(image_url, "url", None)
-            if isinstance(image_url, str) and image_url.strip():
-                references.append(image_url.strip())
+        references = [
+            reference
+            for part in content
+            if (reference := image_reference_from_part(part))
+        ]
         if references:
             return references
     return []
@@ -280,8 +290,16 @@ async def collect_tool_reference_images(
 
     context_source_images: list[ImageData] = []
     if use_context_images:
-        context_source_images = await image_processor.fetch_images_from_event(event)
-        if context_images and not context_source_images:
+        # Only actual message images count here. Mention avatars are collected
+        # later through avatar_references and must not block history or cache.
+        context_source_images = await image_processor.fetch_message_images_from_event(
+            event
+        )
+        if not context_source_images and cached_context_images:
+            context_source_images = [
+                ensure_image_data(image) for image in cached_context_images
+            ]
+        if not context_source_images and context_images:
             context_source_images = await download_reference_images(
                 image_processor,
                 context_images,
@@ -290,10 +308,6 @@ async def collect_tool_reference_images(
                 log_context="LLMTool",
                 workspace_dir=workspace_dir,
             )
-        if cached_context_images and not context_source_images:
-            context_source_images = [
-                ensure_image_data(image) for image in cached_context_images
-            ]
         if not context_source_images:
             raise ContextReferenceImageNotFoundError
 

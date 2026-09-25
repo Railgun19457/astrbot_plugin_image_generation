@@ -497,9 +497,16 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
         context_references: list[str] = []
         cached_context_images: list[ImageData] = []
         if use_context_images:
-            context_references = extract_latest_user_context_images(
-                getattr(context, "messages", None)
-            )
+            history_messages = list(getattr(context, "messages", None) or [])
+            # The current turn is appended to the live context before tools run.
+            # Its images are collected from the event, so skip that trailing copy
+            # and let an earlier cached image win over older history.
+            if (
+                history_messages
+                and getattr(history_messages[-1], "role", None) == "user"
+            ):
+                history_messages = history_messages[:-1]
+            context_references = extract_latest_user_context_images(history_messages)
             if context_references:
                 logger.debug(
                     f"{LOG} 已从聊天上下文选取最近一条用户消息中的 "
@@ -509,7 +516,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
                 logger.warning(f"{LOG} 已请求使用聊天上下文图片，但未找到可用图片")
             cache_getter = getattr(plugin, "get_recent_context_images", None)
             if callable(cache_getter):
-                cached_context_images = cache_getter(event.unified_msg_origin)
+                cached_context_images = cache_getter(event)
                 if cached_context_images:
                     logger.debug(
                         f"{LOG} 已从会话缓存取得 {len(cached_context_images)} 张参考图"

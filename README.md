@@ -181,7 +181,7 @@
 | `manage_image_tasks`  | 生图任务工具 | 查看当前会话任务列表、查看任务详情、取消仍在进行的任务。              |
 | `edit_image_presets`  | 预设编辑工具 | 创建或删除预设；默认不启用，开启后 AI 可修改预设配置，但不会编辑人设。 |
 
-LLM 生图工具支持 `preset`、`persona`、`aspect_ratio`、`resolution`、`image_count`、`avatar_references`、`reference_images` 和 `use_context_images` 参数。`avatar_references` 可填写 `self`、`sender` 或用户 ID；`reference_images` 支持网络图片 URL，本地路径仅允许当前会话 workspace、AstrBot temp 目录和本插件数据目录。仅在 LLM 改图显式传入 `use_context_images=true` 时，插件才会按需取得当前消息、引用消息或近期聊天中的参考图，纯文生图不会自动取图。上一条独立消息中的图片会短期缓存在内存中，即使其他插件将历史图片替换成文字摘要也仍可用于改图。未找到可用图片时会取消任务，不会降级为纯文生图。
+LLM 生图工具支持 `preset`、`persona`、`aspect_ratio`、`resolution`、`image_count`、`avatar_references`、`reference_images` 和 `use_context_images` 参数。`avatar_references` 可填写 `self`、`sender` 或用户 ID；`reference_images` 支持网络图片 URL，本地路径仅允许当前会话 workspace、AstrBot temp 目录和本插件数据目录。仅在 LLM 改图显式传入 `use_context_images=true` 时，插件才会按需取得参考图，纯文生图不会自动取图。优先级为当前消息或引用消息中的图片、同一发送者最近缓存的图片、近期历史中最后一条带图的用户消息。缓存按会话和发送者隔离，只保存该发送者直接发送的图片，因此群聊中不会取到其他成员的图片，引用旧图也不会覆盖缓存。未找到可用图片时会取消任务，不会降级为纯文生图。
 
 ## 任务体系
 
