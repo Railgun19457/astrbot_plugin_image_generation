@@ -82,6 +82,59 @@ def find_named_entry(entries: dict[str, Any], token: str) -> str | None:
     return None
 
 
+def resolve_named_templates(
+    names: list[str],
+    entries: dict[str, Any],
+    *,
+    kind: str,
+    aspect_ratio: str,
+    resolution: str,
+) -> tuple[list[str], str, str, list[str], list[tuple[str, str]], str | None]:
+    """Resolve one kind of explicit template name.
+
+    Args:
+        names: Names already split and ordered by the caller.
+        entries: Preset contents or persona templates for ``kind``.
+        kind: ``preset`` or ``persona``.
+        aspect_ratio: Current aspect ratio, updated by JSON presets.
+        resolution: Current resolution, updated by JSON presets.
+
+    Returns:
+        Prompt fragments, aspect ratio, resolution, matched names, persona
+        reference images, and a plain missing-name error. Preset resolution
+        leaves the image list empty; persona resolution leaves ratio and
+        resolution unchanged.
+    """
+    prompts: list[str] = []
+    matched_names: list[str] = []
+    persona_images: list[tuple[str, str]] = []
+    label = "人设" if kind == "persona" else "预设"
+
+    for name in names:
+        matched_name = find_named_entry(entries, name)
+        if not matched_name:
+            return [], aspect_ratio, resolution, [], [], f"{label}不存在: {name}"
+
+        if kind == "persona":
+            persona = entries[matched_name]
+            persona_prompt = persona.prompt.strip()
+            if persona_prompt:
+                prompts.append(persona_prompt)
+            if persona.image:
+                persona_images.append((matched_name, persona.image))
+        else:
+            preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
+                entries[matched_name],
+                aspect_ratio,
+                resolution,
+            )
+            if preset_prompt:
+                prompts.append(preset_prompt)
+        matched_names.append(matched_name)
+
+    return prompts, aspect_ratio, resolution, matched_names, persona_images, None
+
+
 def _ascii_token_boundary_ok(text: str, start: int, end: int) -> bool:
     """Return whether an ASCII template name sits on a token boundary.
 
@@ -369,11 +422,12 @@ class ConfigTemplateStoreMixin:
 
 
 __all__ = (
-    "build_generation_prompt",
     "ConfigTemplateStoreMixin",
+    "build_generation_prompt",
     "extract_templates_from_prompt",
     "find_named_entry",
     "format_template_summary",
     "normalize_name_items",
     "parse_preset_prompt",
+    "resolve_named_templates",
 )

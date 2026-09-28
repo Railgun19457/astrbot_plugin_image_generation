@@ -73,7 +73,7 @@ from .core.config.templates import (
     extract_templates_from_prompt,
     find_named_entry,
     format_template_summary,
-    parse_preset_prompt,
+    resolve_named_templates,
 )
 from .core.shared.types import ImageCapability, ImageData
 from .core.tasks.usage import UsageManager
@@ -593,42 +593,38 @@ class ImageGenerationPlugin(Star):
             )
 
         tokens = raw_prompt.split()
-        preset_prompts: list[str] = []
-        persona_prompts: list[str] = []
-        matched_presets: list[str] = []
-        matched_personas: list[str] = []
-        persona_images: list[tuple[str, str]] = []
+        preset_names: list[str] = []
+        persona_names: list[str] = []
         extra_content = ""
 
         for index, token in enumerate(tokens):
-            matched_preset = find_named_entry(self.config_manager.presets, token)
-            if matched_preset:
-                preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
-                    self.config_manager.presets[matched_preset],
-                    aspect_ratio,
-                    resolution,
-                )
-                if preset_prompt:
-                    preset_prompts.append(preset_prompt)
-                matched_presets.append(matched_preset)
+            if find_named_entry(self.config_manager.presets, token):
+                preset_names.append(token)
                 continue
-
-            matched_persona = find_named_entry(
-                self.config_manager.personas,
-                token,
-            )
-            if matched_persona:
-                persona = self.config_manager.personas[matched_persona]
-                persona_prompt = persona.prompt.strip()
-                if persona_prompt:
-                    persona_prompts.append(persona_prompt)
-                if persona.image:
-                    persona_images.append((matched_persona, persona.image))
-                matched_personas.append(matched_persona)
+            if find_named_entry(self.config_manager.personas, token):
+                persona_names.append(token)
                 continue
-
             extra_content = " ".join(tokens[index:]).strip()
             break
+
+        preset_prompts, aspect_ratio, resolution, matched_presets, _, _ = (
+            resolve_named_templates(
+                preset_names,
+                self.config_manager.presets,
+                kind="preset",
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+            )
+        )
+        persona_prompts, _, _, matched_personas, persona_images, _ = (
+            resolve_named_templates(
+                persona_names,
+                self.config_manager.personas,
+                kind="persona",
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+            )
+        )
 
         if not matched_presets and not matched_personas:
             return raw_prompt, aspect_ratio, resolution, [], [], []

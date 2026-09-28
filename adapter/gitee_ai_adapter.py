@@ -330,21 +330,6 @@ class GiteeAIAdapter(BaseImageAdapter):
             logger.debug(f"{prefix} 成功提取 {len(images)} 张图像")
         return images, None
 
-    def _decode_base64_image(
-        self, value: Any, task_id: str | None = None
-    ) -> bytes | None:
-        """Decode a b64_json or data URL image value."""
-        data = str(value or "")
-        if ";base64," in data:
-            _, _, data = data.partition(";base64,")
-        try:
-            return base64.b64decode(data)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                f"{self._get_log_prefix(task_id)} Base64 解码失败: {safe_log_error_body(exc)}"
-            )
-            return None
-
     async def _download_image(
         self, url: str, task_id: str | None = None
     ) -> bytes | None:

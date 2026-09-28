@@ -20,7 +20,7 @@ from ..config.templates import (
     find_named_entry,
     format_template_summary,
     normalize_name_items as _normalize_name_items,
-    parse_preset_prompt,
+    resolve_named_templates,
 )
 from ..generation.reference_collector import (
     ContextReferenceImageNotFoundError,
@@ -109,74 +109,6 @@ def normalize_task_action(action: str) -> str:
     if normalized in {"取消", "cancel", "cancel_task"}:
         return "cancel"
     return normalized
-
-
-def _parse_preset(
-    plugin: Any,
-    preset_names: Any,
-    aspect_ratio: Any,
-    resolution: Any,
-) -> tuple[list[str], str, str, list[str], str | None]:
-    """Apply one or more preset prompts and optional generation overrides."""
-    names = normalize_name_items(preset_names)
-    if not names:
-        return [], str(aspect_ratio), str(resolution), [], None
-
-    prompt_parts: list[str] = []
-    matched_presets: list[str] = []
-    for preset_name in names:
-        matched_preset = find_named_entry(plugin.config_manager.presets, preset_name)
-        if not matched_preset:
-            return (
-                [],
-                str(aspect_ratio),
-                str(resolution),
-                [],
-                f"❌ 预设不存在: {preset_name}",
-            )
-
-        preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
-            plugin.config_manager.presets[matched_preset],
-            str(aspect_ratio),
-            str(resolution),
-        )
-
-        if preset_prompt:
-            prompt_parts.append(preset_prompt)
-        matched_presets.append(matched_preset)
-
-    return prompt_parts, str(aspect_ratio), str(resolution), matched_presets, None
-
-
-def _parse_persona(
-    plugin: Any,
-    persona_names: Any,
-) -> tuple[list[str], list[tuple[str, str]], list[str], str | None]:
-    """Apply one or more persona prompts and reference images."""
-    names = normalize_name_items(persona_names)
-    if not names:
-        return [], [], [], None
-
-    prompt_parts: list[str] = []
-    persona_images: list[tuple[str, str]] = []
-    matched_personas: list[str] = []
-    for persona_name in names:
-        matched_persona = find_named_entry(
-            plugin.config_manager.personas,
-            persona_name,
-        )
-        if not matched_persona:
-            return [], [], [], f"❌ 人设不存在: {persona_name}"
-
-        persona = plugin.config_manager.personas[matched_persona]
-        persona_prompt = persona.prompt.strip()
-        if persona_prompt:
-            prompt_parts.append(persona_prompt)
-        if persona.image:
-            persona_images.append((matched_persona, persona.image))
-        matched_personas.append(matched_persona)
-
-    return prompt_parts, persona_images, matched_personas, None
 
 
 async def _start_generation_task(
@@ -429,22 +361,28 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             kwargs.get("resolution") or plugin.config_manager.default_resolution
         )
 
-        preset_prompts, aspect_ratio, resolution, matched_presets, error = (
-            _parse_preset(
-                plugin,
-                kwargs.get("preset"),
-                aspect_ratio,
-                resolution,
+        preset_prompts, aspect_ratio, resolution, matched_presets, _, error = (
+            resolve_named_templates(
+                normalize_name_items(kwargs.get("preset")),
+                plugin.config_manager.presets,
+                kind="preset",
+                aspect_ratio=str(aspect_ratio),
+                resolution=str(resolution),
             )
         )
         if error:
-            return error
-        persona_prompts, persona_images, matched_personas, error = _parse_persona(
-            plugin,
-            kwargs.get("persona"),
+            return f"❌ {error}"
+        persona_prompts, _, _, matched_personas, persona_images, error = (
+            resolve_named_templates(
+                normalize_name_items(kwargs.get("persona")),
+                plugin.config_manager.personas,
+                kind="persona",
+                aspect_ratio=str(aspect_ratio),
+                resolution=str(resolution),
+            )
         )
         if error:
-            return error
+            return f"❌ {error}"
         if plugin.config_manager.match_templates_in_prompt_body:
             (
                 prompt,
