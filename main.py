@@ -707,6 +707,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图任务")
     async def image_task_command(self, event: AstrMessageEvent, task_id: str = ""):
         """Show image generation tasks or one task detail."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         task_id = (task_id or "").strip()
 
@@ -744,6 +746,8 @@ class ImageGenerationPlugin(Star):
         self, event: AstrMessageEvent, task_id: str = ""
     ):
         """Cancel one image generation task."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         task_id = (task_id or "").strip()
         if not task_id:
             active_records = self.task_manager.list_generation_tasks(
@@ -780,6 +784,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图")
     async def generate_image_command(self, event: AstrMessageEvent):
         """Handle the image generation command."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         is_usage_limit_admin = self.is_usage_limit_admin(event)
 
@@ -967,6 +973,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图模型")
     async def model_command(self, event: AstrMessageEvent, model_index: str = ""):
         """Switch the active image generation model."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         if not self.config_manager.adapter_config:
             yield event.plain_result("❌ 适配器未初始化")
             return
@@ -1014,6 +1022,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("预设")
     async def preset_command(self, event: AstrMessageEvent):
         """Manage image generation presets."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         masked_uid = mask_sensitive(user_id)
         message_str = (event.message_str or "").strip()
