@@ -121,6 +121,7 @@ class GenerationTaskRecord:
     items: dict[int, GenerationTaskItem] = field(default_factory=dict)
     usage_scope: str = ""
     reserved_count: int = 0
+    quota_date: str = ""
     is_usage_limit_admin: bool = False
     quota_released: bool = False
     quota_settled: bool = False

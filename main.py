@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,22 @@ from .core.config.templates import (
 )
 from .core.shared.types import ImageCapability, ImageData
 from .core.tasks.usage import UsageManager
+
+_COMMAND_NAMES = ("生图任务", "生图取消", "生图模型", "生图预设", "生图", "预设")
+
+
+def _matches_registered_command(message: str, command: str) -> bool:
+    """Return whether a normalized message invokes one registered command.
+
+    AstrBot matches command prefixes in handler registration order. A shorter
+    command can therefore consume a longer sibling after a plugin reload.
+    """
+    normalized = re.sub(r"\s+", " ", message.strip())
+    for name in sorted(_COMMAND_NAMES, key=len, reverse=True):
+        if normalized == name or normalized.startswith(f"{name} "):
+            return name == command
+    return False
+
 
 LOG = log_prefix("Plugin")
 
@@ -171,7 +188,7 @@ class ImageGenerationPlugin(Star):
         else:
             logger.error(f"{LOG} 适配器配置加载失败，插件未初始化")
 
-        self.task_manager.load_generation_history()
+        self.task_manager.load_generation_history(self.usage_manager)
         self.task_manager.configure_generation_queue(
             max_queued_generation_tasks=self.config_manager.max_queued_generation_tasks
         )
@@ -410,6 +427,13 @@ class ImageGenerationPlugin(Star):
                 personas or [],
             )
         image_count = self.normalize_image_count(image_count)
+        quota_date = ""
+        if unified_msg_origin and image_count > 0:
+            quota_date = self.usage_manager.reserve_usage(
+                unified_msg_origin,
+                image_count,
+                is_admin=is_usage_limit_admin,
+            )
 
         def _generation_coro_factory():
             return self.generation_executor.generate_and_send_image_async(
@@ -446,16 +470,19 @@ class ImageGenerationPlugin(Star):
                 preset=preset,
                 preset_label=preset_label,
                 usage_scope=unified_msg_origin,
-                reserved_count=image_count if unified_msg_origin else 0,
+                reserved_count=image_count if quota_date else 0,
+                quota_date=quota_date,
                 is_usage_limit_admin=is_usage_limit_admin,
                 terminal_callback=self._handle_generation_task_terminal,
             )
         except GenerationTaskCreationError:
-            self.usage_manager.release_reserved_usage(
-                unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-                count=image_count,
-            )
+            if quota_date:
+                self.usage_manager.release_reserved_usage(
+                    unified_msg_origin,
+                    is_admin=is_usage_limit_admin,
+                    count=image_count,
+                    quota_date=quota_date,
+                )
             raise
         if source == "LLM工具":
             self.llm_result_handler.attach_task_wakeup(
@@ -707,6 +734,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图任务")
     async def image_task_command(self, event: AstrMessageEvent, task_id: str = ""):
         """Show image generation tasks or one task detail."""
+        if not _matches_registered_command(event.message_str or "", "生图任务"):
+            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin
@@ -746,6 +775,8 @@ class ImageGenerationPlugin(Star):
         self, event: AstrMessageEvent, task_id: str = ""
     ):
         """Cancel one image generation task."""
+        if not _matches_registered_command(event.message_str or "", "生图取消"):
+            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         task_id = (task_id or "").strip()
@@ -784,6 +815,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图")
     async def generate_image_command(self, event: AstrMessageEvent):
         """Handle the image generation command."""
+        if not _matches_registered_command(event.message_str or "", "生图"):
+            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin
@@ -874,12 +907,12 @@ class ImageGenerationPlugin(Star):
             user_id,
             is_admin=is_usage_limit_admin,
             requested_count=image_count,
+            update_timestamp=False,
         )
         if isinstance(check_result, str):
             if check_result:
                 yield event.plain_result(check_result)
             return
-        usage_reserved = True
         task_created = False
 
         task_id = new_task_id()
@@ -907,45 +940,46 @@ class ImageGenerationPlugin(Star):
 
             reference_image_count = len(images_data or [])
 
-            try:
-                self.create_generation_task(
-                    task_id=task_id,
-                    source="指令",
-                    prompt=prompt,
-                    images_data=images_data,
-                    unified_msg_origin=event.unified_msg_origin,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    image_count=image_count,
-                    is_usage_limit_admin=is_usage_limit_admin,
-                    preset=preset_or_persona,
-                    preset_label=preset_label,
-                    presets=matched_presets,
-                    personas=matched_personas,
-                )
-                task_created = True
-            except GenerationTaskCreationError:
-                # create_generation_task() rolls back quota reservation on creation failure.
-                usage_reserved = False
-                raise
+            self.create_generation_task(
+                task_id=task_id,
+                source="指令",
+                prompt=prompt,
+                images_data=images_data,
+                unified_msg_origin=event.unified_msg_origin,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                image_count=image_count,
+                is_usage_limit_admin=is_usage_limit_admin,
+                preset=preset_or_persona,
+                preset_label=preset_label,
+                presets=matched_presets,
+                personas=matched_personas,
+            )
+            task_created = True
         except asyncio.CancelledError:
-            if usage_reserved and not task_created:
-                self.usage_manager.release_reserved_usage(
-                    user_id,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                )
+            if not task_created:
+                record = self.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    self.usage_manager.release_reserved_usage(
+                        user_id,
+                        is_admin=is_usage_limit_admin,
+                        count=image_count,
+                        quota_date=record.quota_date,
+                    )
             raise
         except GenerationTaskCreationError as exc:
             yield event.plain_result(f"❌ 生图任务提交失败: {exc.message}")
             return
         except Exception as exc:
-            if usage_reserved and not task_created:
-                self.usage_manager.release_reserved_usage(
-                    user_id,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                )
+            if not task_created:
+                record = self.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    self.usage_manager.release_reserved_usage(
+                        user_id,
+                        is_admin=is_usage_limit_admin,
+                        count=image_count,
+                        quota_date=record.quota_date,
+                    )
             logger.error(
                 f"{log_prefix('Task', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
                 exc_info=True,
@@ -973,6 +1007,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图模型")
     async def model_command(self, event: AstrMessageEvent, model_index: str = ""):
         """Switch the active image generation model."""
+        if not _matches_registered_command(event.message_str or "", "生图模型"):
+            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         if not self.config_manager.adapter_config:
@@ -1022,6 +1058,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("预设")
     async def preset_command(self, event: AstrMessageEvent):
         """Manage image generation presets."""
+        if not _matches_registered_command(event.message_str or "", "预设"):
+            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin

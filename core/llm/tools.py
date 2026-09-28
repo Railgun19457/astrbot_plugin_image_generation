@@ -240,13 +240,13 @@ async def _start_generation_task(
         event.unified_msg_origin,
         is_admin=is_usage_limit_admin,
         requested_count=image_count,
+        update_timestamp=False,
     )
     if isinstance(check_result, str):
         if check_result:
             masked_uid = mask_sensitive(event.unified_msg_origin)
             logger.info(f"{LOG} 工具调用触发限制: {check_result} (用户: {masked_uid})")
         return check_result
-    usage_reserved = True
     task_created = False
 
     task_id = new_task_id()
@@ -277,53 +277,57 @@ async def _start_generation_task(
 
         reference_image_count = len(images_data)
 
-        try:
-            plugin.create_generation_task(
-                task_id=task_id,
-                source="LLM工具",
-                prompt=prompt,
-                images_data=images_data,
-                unified_msg_origin=event.unified_msg_origin,
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-                image_count=image_count,
-                is_usage_limit_admin=is_usage_limit_admin,
-                preset=preset_or_persona,
-                preset_label=preset_label,
-                presets=presets,
-                personas=personas,
-                source_event=event,
-            )
-            task_created = True
-        except GenerationTaskCreationError:
-            # create_generation_task() rolls back quota reservation on creation failure.
-            usage_reserved = False
-            raise
+        plugin.create_generation_task(
+            task_id=task_id,
+            source="LLM工具",
+            prompt=prompt,
+            images_data=images_data,
+            unified_msg_origin=event.unified_msg_origin,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            image_count=image_count,
+            is_usage_limit_admin=is_usage_limit_admin,
+            preset=preset_or_persona,
+            preset_label=preset_label,
+            presets=presets,
+            personas=personas,
+            source_event=event,
+        )
+        task_created = True
     except asyncio.CancelledError:
-        if usage_reserved and not task_created:
-            plugin.usage_manager.release_reserved_usage(
-                event.unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-                count=image_count,
-            )
+        if not task_created:
+            record = plugin.task_manager.get_generation_task(task_id)
+            if record and record.quota_date:
+                plugin.usage_manager.release_reserved_usage(
+                    event.unified_msg_origin,
+                    is_admin=is_usage_limit_admin,
+                    count=image_count,
+                    quota_date=record.quota_date,
+                )
         raise
     except GenerationTaskCreationError as exc:
         return f"❌ 生图任务提交失败: {exc.message} ({exc.code})"
     except ContextReferenceImageNotFoundError:
-        if usage_reserved and not task_created:
-            plugin.usage_manager.release_reserved_usage(
-                event.unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-                count=image_count,
-            )
+        if not task_created:
+            record = plugin.task_manager.get_generation_task(task_id)
+            if record and record.quota_date:
+                plugin.usage_manager.release_reserved_usage(
+                    event.unified_msg_origin,
+                    is_admin=is_usage_limit_admin,
+                    count=image_count,
+                    quota_date=record.quota_date,
+                )
         return "❌ 未找到可用的聊天图片，已取消改图任务；请重新发送或引用图片后再试"
     except Exception as exc:
-        if usage_reserved and not task_created:
-            plugin.usage_manager.release_reserved_usage(
-                event.unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-                count=image_count,
-            )
+        if not task_created:
+            record = plugin.task_manager.get_generation_task(task_id)
+            if record and record.quota_date:
+                plugin.usage_manager.release_reserved_usage(
+                    event.unified_msg_origin,
+                    is_admin=is_usage_limit_admin,
+                    count=image_count,
+                    quota_date=record.quota_date,
+                )
         logger.error(
             f"{log_prefix('LLMTool', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
             exc_info=True,

@@ -183,6 +183,7 @@ class TaskManager(
         preset_label: str = "预设",
         usage_scope: str = "",
         reserved_count: int = 0,
+        quota_date: str = "",
         is_usage_limit_admin: bool = False,
         terminal_callback: GenerationTaskCallback | None = None,
     ) -> GenerationTaskRecord:
@@ -220,6 +221,7 @@ class TaskManager(
                 for index in range(1, safe_requested_count + 1)
             },
             usage_scope=usage_scope,
+            quota_date=str(quota_date or "").strip(),
             reserved_count=max(0, reserved_count),
             is_usage_limit_admin=bool(is_usage_limit_admin),
         )
@@ -243,8 +245,18 @@ class TaskManager(
         )
         return record
 
-    def load_generation_history(self) -> None:
-        """Load persisted generation task history from disk."""
+    @property
+    def generation_tasks(self) -> dict[str, GenerationTaskRecord]:
+        """Return tracked generation tasks keyed by task id."""
+        return self._generation_tasks
+
+    def load_generation_history(self, usage_manager: Any | None = None) -> None:
+        """Load persisted generation task history from disk.
+
+        Args:
+            usage_manager: Optional quota manager. When provided, unsettled
+                reservations are restored before interrupted tasks are closed.
+        """
         if not self._enable_generation_task_history:
             logger.debug(f"{LOG} 生图任务历史持久化已关闭，跳过加载")
             return
@@ -254,7 +266,10 @@ class TaskManager(
         restored_tasks: dict[str, GenerationTaskRecord] = {}
         history_changed = False
         now = datetime.now()
-        for record in self._generation_store.load():
+        loaded_records = self._generation_store.load()
+        if usage_manager is not None:
+            history_changed = bool(usage_manager.restore_reservations(loaded_records))
+        for record in loaded_records:
             if record.status in ACTIVE_GENERATION_STATUSES:
                 record.status = GenerationTaskStatus.CANCELLED
                 record.message = "插件重启导致任务中断"

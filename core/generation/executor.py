@@ -205,6 +205,7 @@ class GenerationExecutor:
             record.usage_scope,
             is_admin=record.is_usage_limit_admin,
             count=record.reserved_count,
+            quota_date=record.quota_date,
         )
         self.task_manager.mark_generation_task_quota_released(task_id)
 
@@ -228,6 +229,7 @@ class GenerationExecutor:
             is_admin=record.is_usage_limit_admin,
             reserved_count=record.reserved_count,
             actual_count=actual_count,
+            quota_date=record.quota_date,
         )
         self.task_manager.mark_generation_task_quota_settled(task_id)
 

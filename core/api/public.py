@@ -169,6 +169,7 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
+                update_timestamp=False,
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -185,7 +186,6 @@ class ImageGenerationPublicAPI:
                     check_result,
                 )
 
-        usage_reserved = use_usage_scope
         task_created = False
         try:
             references = await self._collect_reference_images(
@@ -229,28 +229,33 @@ class ImageGenerationPublicAPI:
                 )
             )
         except GenerationTaskCreationError as exc:
-            # create_generation_task() rolls back quota reservation on creation failure.
-            usage_reserved = False
+            # create_generation_task() rolls back its own quota reservation.
             return self._submit_error(
                 TASK_CREATION_ERROR_CODES.get(exc.code, PublicAPIResultCode.REJECTED),
                 exc.message,
                 error=exc.code,
             )
         except asyncio.CancelledError:
-            if usage_reserved and not task_created:
-                plugin.usage_manager.release_reserved_usage(
-                    scope,
-                    is_admin=safe_is_admin,
-                    count=requested_count,
-                )
+            if not task_created:
+                record = plugin.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    plugin.usage_manager.release_reserved_usage(
+                        scope,
+                        is_admin=safe_is_admin,
+                        count=requested_count,
+                        quota_date=record.quota_date,
+                    )
             raise
         except Exception as exc:
-            if usage_reserved and not task_created:
-                plugin.usage_manager.release_reserved_usage(
-                    scope,
-                    is_admin=safe_is_admin,
-                    count=requested_count,
-                )
+            if not task_created:
+                record = plugin.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    plugin.usage_manager.release_reserved_usage(
+                        scope,
+                        is_admin=safe_is_admin,
+                        count=requested_count,
+                        quota_date=record.quota_date,
+                    )
             logger.error(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(

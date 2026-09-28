@@ -146,6 +146,7 @@ class GenerationTaskStore:
             ],
             "usage_scope": record.usage_scope,
             "reserved_count": record.reserved_count,
+            "quota_date": record.quota_date,
             "quota_released": record.quota_released,
             "quota_settled": record.quota_settled,
         }
@@ -230,6 +231,7 @@ class GenerationTaskStore:
             ),
             usage_scope=str(raw_record.get("usage_scope") or ""),
             reserved_count=self._safe_int(raw_record.get("reserved_count"), 0, 0),
+            quota_date=str(raw_record.get("quota_date") or "").strip(),
             quota_released=bool(raw_record.get("quota_released", False)),
             quota_settled=bool(raw_record.get("quota_settled", False)),
         )
