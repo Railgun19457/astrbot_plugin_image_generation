@@ -100,7 +100,6 @@ class TaskManager(
         persistence_file: str | Path | None = None,
     ):
         self.background_tasks: set[asyncio.Task] = set()
-        self._loop_tasks: dict[str, asyncio.Task] = {}
         self._daily_tasks: dict[str, asyncio.Task] = {}
         self._last_run_dates: dict[str, str] = {}
         self._startup_tasks: list[
@@ -245,11 +244,6 @@ class TaskManager(
         )
         return record
 
-    @property
-    def generation_tasks(self) -> dict[str, GenerationTaskRecord]:
-        """Return tracked generation tasks keyed by task id."""
-        return self._generation_tasks
-
     def load_generation_history(self, usage_manager: Any | None = None) -> None:
         """Load persisted generation task history from disk.
 
@@ -298,10 +292,6 @@ class TaskManager(
         if history_changed:
             self._save_generation_tasks()
         logger.info(f"{LOG} 已加载生图任务历史: {len(self._generation_tasks)} 条")
-
-    def flush_generation_history(self) -> None:
-        """Persist the current generation task history immediately."""
-        self._save_generation_tasks()
 
     def configure_generation_history(
         self,
@@ -678,29 +668,6 @@ class TaskManager(
 
         self.mark_generation_task_cancelled(task_id)
         return True, f"✅ 任务已取消: {task_id}"
-
-    def cleanup_generation_tasks(self, *, unified_msg_origin: str | None = None) -> int:
-        """Remove finished generation task records."""
-        removed = 0
-        for task_id, record in list(self._generation_tasks.items()):
-            if record.is_active:
-                continue
-            if (
-                unified_msg_origin is not None
-                and record.unified_msg_origin != unified_msg_origin
-            ):
-                continue
-            del self._generation_tasks[task_id]
-            self._generation_terminal_callbacks.pop(task_id, None)
-            self._generation_done_callbacks.pop(task_id, None)
-            self._generation_done_events.pop(task_id, None)
-            self._generation_terminal_notifying.discard(task_id)
-            self._generation_terminal_notified.discard(task_id)
-            self._generation_notification_tasks.pop(task_id, None)
-            removed += 1
-        if removed:
-            self._save_generation_tasks()
-        return removed
 
     def _trim_generation_history(self) -> bool:
         """Keep finished task history bounded while preserving active tasks."""

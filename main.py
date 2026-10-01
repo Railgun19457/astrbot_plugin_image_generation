@@ -57,9 +57,6 @@ from .core.tasks.models import (
 )
 from .core.tasks.usage import UsageManager
 
-_COMMAND_NAMES = ("生图任务", "生图取消", "生图模型", "生图", "预设")
-
-
 LOG = log_prefix("Plugin")
 
 

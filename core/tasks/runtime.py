@@ -63,67 +63,7 @@ class BackgroundTaskMixin:
 
 
 class TaskSchedulerMixin:
-    """Mixin for startup, loop, daily, and shutdown task management."""
-
-    def start_loop_task(
-        self,
-        name: str,
-        coro_func: Callable[[], Coroutine[Any, Any, Any]],
-        interval_seconds: float,
-        run_immediately: bool = True,
-    ) -> None:
-        """Start a periodic loop task.
-
-        Args:
-            name: Unique task name used for tracking and logs.
-            coro_func: Function that returns the task coroutine.
-            interval_seconds: Run interval in seconds.
-            run_immediately: Whether to run once immediately after startup.
-        """
-        if name in self._loop_tasks:
-            self.stop_loop_task(name)
-
-        log_name = _task_name(name)
-
-        async def _loop():
-            if run_immediately:
-                try:
-                    await coro_func()
-                except Exception as e:
-                    logger.error(
-                        f"{LOG} 定时任务 {log_name} 初始执行失败: {e}",
-                        exc_info=True,
-                    )
-
-            while True:
-                try:
-                    await asyncio.sleep(interval_seconds)
-                    await coro_func()
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.error(
-                        f"{LOG} 定时任务 {log_name} 执行出错: {e}",
-                        exc_info=True,
-                    )
-
-        task = asyncio.create_task(_loop(), name=f"loop_{name}")
-        self._loop_tasks[name] = task
-        self.background_tasks.add(task)
-        task.add_done_callback(functools.partial(self._on_loop_task_done, name))
-        logger.debug(f"{LOG} 定时任务 {log_name} 已启动 (间隔: {interval_seconds}s)")
-
-    def stop_loop_task(self, name: str) -> None:
-        """Stop one loop task."""
-        if task := self._loop_tasks.pop(name, None):
-            if not task.done():
-                task.cancel()
-            logger.debug(f"{LOG} 定时任务 {_task_name(name)} 已停止")
-
-    def _on_loop_task_done(self, name: str, task: asyncio.Task) -> None:
-        """Handle loop task completion."""
-        self.background_tasks.discard(task)
-        self._loop_tasks.pop(name, None)
+    """Mixin for startup, daily, and shutdown task management."""
 
     def register_startup_task(
         self,
@@ -308,7 +248,6 @@ class TaskSchedulerMixin:
             await asyncio.gather(*self.background_tasks, return_exceptions=True)
 
         self.background_tasks.clear()
-        self._loop_tasks.clear()
         self._daily_tasks.clear()
         self._last_run_dates.clear()
         self._generation_workers.clear()
