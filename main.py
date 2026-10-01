@@ -58,7 +58,7 @@ from .core.tasks.models import (
 )
 from .core.tasks.usage import UsageManager
 
-_COMMAND_NAMES = ("生图任务", "生图取消", "生图模型", "生图预设", "生图", "预设")
+_COMMAND_NAMES = ("生图任务", "生图取消", "生图模型", "生图", "预设")
 
 
 def _matches_registered_command(message: str, command: str) -> bool:
@@ -464,6 +464,11 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                     quota_date=quota_date,
                 )
             raise
+        # Start the cooldown window only after the task is actually accepted.
+        self.usage_manager.record_request_timestamp(
+            unified_msg_origin,
+            is_admin=is_usage_limit_admin,
+        )
         if source == "LLM工具":
             self.llm_result_handler.attach_task_wakeup(
                 record,
@@ -643,7 +648,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             user_id,
             is_admin=is_usage_limit_admin,
             requested_count=image_count,
-            update_timestamp=False,
         )
         if isinstance(check_result, str):
             if check_result:
@@ -669,7 +673,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             user_id,
             is_admin=is_usage_limit_admin,
             requested_count=image_count,
-            update_timestamp=False,
         )
         if isinstance(check_result, str):
             if check_result:

@@ -127,7 +127,6 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
-                update_timestamp=False,
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -168,7 +167,6 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
-                update_timestamp=False,
             )
             if isinstance(check_result, str):
                 logger.info(

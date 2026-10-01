@@ -114,7 +114,6 @@ async def _start_generation_task(
         event.unified_msg_origin,
         is_admin=is_usage_limit_admin,
         requested_count=image_count,
-        update_timestamp=False,
     )
     if isinstance(check_result, str):
         if check_result:
@@ -137,7 +136,6 @@ async def _start_generation_task(
         event.unified_msg_origin,
         is_admin=is_usage_limit_admin,
         requested_count=image_count,
-        update_timestamp=False,
     )
     if isinstance(check_result, str):
         if check_result:

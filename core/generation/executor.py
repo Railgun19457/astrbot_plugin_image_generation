@@ -183,7 +183,7 @@ class GenerationExecutor:
                 deliver_via_ai,
                 auto_send,
             )
-        except (asyncio.CancelledError, Exception):
+        except Exception:
             self.release_generation_task_quota_once(task_id)
             raise
 
@@ -447,9 +447,7 @@ class GenerationExecutor:
                         task_id=task_id,
                         batch_index=current_index,
                         batch_count=image_count,
-                        retry_status_callback=lambda retry_attempt,
-                        max_retry_attempts,
-                        current_index=current_index: (
+                        retry_status_callback=lambda retry_attempt, max_retry_attempts, current_index=current_index: (
                             self.task_manager.update_generation_task_retry_status(
                                 task_id,
                                 current_index=current_index,

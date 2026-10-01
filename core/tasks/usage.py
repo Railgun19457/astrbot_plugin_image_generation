@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -19,6 +20,9 @@ if TYPE_CHECKING:
 
 
 LOG = log_prefix("Usage")
+
+# Trim expired cooldown entries once the tracker grows past this size.
+_MAX_COOLDOWN_ENTRIES = 4096
 
 
 class UsageManager:
@@ -143,15 +147,20 @@ class UsageManager:
         *,
         is_admin: bool = False,
         requested_count: int = 1,
-        update_timestamp: bool = True,
     ) -> bool | str:
         """Check per-user cooldowns and daily quota limits.
+
+        This is a read-only check. Callers start the cooldown window with
+        ``record_request_timestamp`` only after a task is accepted, so rejected
+        requests do not extend the current cooldown.
 
         Returns:
             True when checks pass, otherwise a user-facing error message.
 
         Args:
-            update_timestamp: Whether to reserve the cooldown when checks pass.
+            user_id: Usage scope being checked.
+            is_admin: Whether the caller bypasses configured limits.
+            requested_count: Number of images the request would consume.
         """
         user_id = str(user_id or "").strip()
 
@@ -163,13 +172,10 @@ class UsageManager:
             return self._settings.blacklist_block_message
 
         if self._settings.rate_limit_seconds > 0:
-            now = time.time()
-            last_ts = self._user_request_timestamps.get(user_id, 0)
-            if now - last_ts < self._settings.rate_limit_seconds:
-                remaining = int(self._settings.rate_limit_seconds - (now - last_ts))
+            elapsed = time.time() - self._user_request_timestamps.get(user_id, 0)
+            if elapsed < self._settings.rate_limit_seconds:
+                remaining = math.ceil(self._settings.rate_limit_seconds - elapsed)
                 return f"❌ 请求过于频繁，请在 {remaining} 秒后再试"
-            if update_timestamp:
-                self._user_request_timestamps[user_id] = now
 
         # Check daily quota limits.
         if self._settings.enable_daily_limit:
@@ -192,35 +198,61 @@ class UsageManager:
                     f"❌ 今日剩余生图额度不足，剩余 {remaining} 张，"
                     f"本次请求 {requested_count} 张"
                 )
-            if update_timestamp:
-                self.reserve_usage(
-                    user_id,
-                    requested_count,
-                    is_admin=is_admin,
-                    quota_date=today,
-                )
 
         return True
 
-    def record_usage(
+    def record_request_timestamp(
         self,
         user_id: str,
         *,
         is_admin: bool = False,
-        count: int = 1,
     ) -> None:
-        """Record generated image usage for one user."""
-        if not self._settings.enable_daily_limit:
+        """Start a new cooldown window for one accepted request.
+
+        Args:
+            user_id: Usage scope whose cooldown should be refreshed.
+            is_admin: Whether the caller bypasses configured limits.
+        """
+        if self._settings.rate_limit_seconds <= 0:
+            return
+        user_id = str(user_id or "").strip()
+        if not user_id or self.is_limit_exempt(user_id, is_admin=is_admin):
             return
 
-        count = max(1, count)
-        today = self._today()
-        if today not in self._usage_data:
-            self._usage_data[today] = {}
-        self._usage_data[today][user_id] = (
-            self._usage_data[today].get(user_id, 0) + count
-        )
-        self._save_usage_data()
+        now = time.time()
+        if len(self._user_request_timestamps) >= _MAX_COOLDOWN_ENTRIES:
+            self._prune_cooldown_timestamps(now)
+        self._user_request_timestamps[user_id] = now
+
+    def _prune_cooldown_timestamps(self, now: float) -> None:
+        """Keep the cooldown tracker bounded.
+
+        Expired windows are dropped first. When every tracked window is still
+        active, a short ``rate_limit_seconds`` would otherwise let the map grow
+        without bound, so the oldest half is evicted as well.
+
+        Args:
+            now: Current monotonic reference used for expiry comparison.
+        """
+        cutoff = now - self._settings.rate_limit_seconds
+        for tracked_user_id in [
+            tracked
+            for tracked, timestamp in self._user_request_timestamps.items()
+            if timestamp < cutoff
+        ]:
+            del self._user_request_timestamps[tracked_user_id]
+
+        # Evict in batches so sorting does not run on every single write.
+        target_size = _MAX_COOLDOWN_ENTRIES // 2
+        overflow = len(self._user_request_timestamps) - target_size
+        if overflow <= 0:
+            return
+        oldest_user_ids = sorted(
+            self._user_request_timestamps,
+            key=self._user_request_timestamps.__getitem__,
+        )[:overflow]
+        for tracked_user_id in oldest_user_ids:
+            del self._user_request_timestamps[tracked_user_id]
 
     def release_reserved_usage(
         self,
