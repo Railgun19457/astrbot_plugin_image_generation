@@ -31,10 +31,9 @@ from ..tasks.ids import new_task_id
 from ..config.templates import (
     build_generation_prompt,
     extract_templates_from_prompt,
-    find_named_entry,
     format_template_summary,
     normalize_name_items,
-    parse_preset_prompt,
+    resolve_named_templates,
 )
 from ..shared.types import ImageCapability, ImageData
 
@@ -128,7 +127,6 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
-                update_timestamp=False,
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -185,7 +183,6 @@ class ImageGenerationPublicAPI:
                     check_result,
                 )
 
-        usage_reserved = use_usage_scope
         task_created = False
         try:
             references = await self._collect_reference_images(
@@ -229,28 +226,33 @@ class ImageGenerationPublicAPI:
                 )
             )
         except GenerationTaskCreationError as exc:
-            # create_generation_task() rolls back quota reservation on creation failure.
-            usage_reserved = False
+            # create_generation_task() rolls back its own quota reservation.
             return self._submit_error(
                 TASK_CREATION_ERROR_CODES.get(exc.code, PublicAPIResultCode.REJECTED),
                 exc.message,
                 error=exc.code,
             )
         except asyncio.CancelledError:
-            if usage_reserved and not task_created:
-                plugin.usage_manager.release_reserved_usage(
-                    scope,
-                    is_admin=safe_is_admin,
-                    count=requested_count,
-                )
+            if not task_created:
+                record = plugin.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    plugin.usage_manager.release_reserved_usage(
+                        scope,
+                        is_admin=safe_is_admin,
+                        count=requested_count,
+                        quota_date=record.quota_date,
+                    )
             raise
         except Exception as exc:
-            if usage_reserved and not task_created:
-                plugin.usage_manager.release_reserved_usage(
-                    scope,
-                    is_admin=safe_is_admin,
-                    count=requested_count,
-                )
+            if not task_created:
+                record = plugin.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    plugin.usage_manager.release_reserved_usage(
+                        scope,
+                        is_admin=safe_is_admin,
+                        count=requested_count,
+                        quota_date=record.quota_date,
+                    )
             logger.error(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(
@@ -512,60 +514,34 @@ class ImageGenerationPublicAPI:
         list[tuple[str, str]],
         str | None,
     ]:
-        preset_prompts: list[str] = []
-        persona_prompts: list[str] = []
-        matched_presets: list[str] = []
-        matched_personas: list[str] = []
-        persona_images: list[tuple[str, str]] = []
         config_manager = self._plugin.config_manager
-
-        for preset_name in normalize_name_items(presets):
-            matched_preset = find_named_entry(
+        preset_prompts, aspect_ratio, resolution, matched_presets, _, error = (
+            resolve_named_templates(
+                normalize_name_items(presets),
                 config_manager.presets,
-                preset_name,
+                kind="preset",
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
             )
-            if not matched_preset:
-                return (
-                    "",
-                    aspect_ratio,
-                    resolution,
-                    [],
-                    [],
-                    [],
-                    f"预设不存在: {preset_name}",
-                )
-            preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
-                config_manager.presets[matched_preset],
-                aspect_ratio,
-                resolution,
-            )
-            if preset_prompt:
-                preset_prompts.append(preset_prompt)
-            matched_presets.append(matched_preset)
-
-        for persona_name in normalize_name_items(personas):
-            matched_persona = find_named_entry(
-                config_manager.personas,
-                persona_name,
-            )
-            if not matched_persona:
-                return (
-                    "",
-                    aspect_ratio,
-                    resolution,
-                    [],
-                    [],
-                    [],
-                    f"人设不存在: {persona_name}",
-                )
-            persona = config_manager.personas[matched_persona]
-            persona_prompt = persona.prompt.strip()
-            if persona_prompt:
-                persona_prompts.append(persona_prompt)
-            if persona.image:
-                persona_images.append((matched_persona, persona.image))
-            matched_personas.append(matched_persona)
-
+        )
+        if error:
+            return "", aspect_ratio, resolution, [], [], [], error
+        (
+            persona_prompts,
+            aspect_ratio,
+            resolution,
+            matched_personas,
+            persona_images,
+            error,
+        ) = resolve_named_templates(
+            normalize_name_items(personas),
+            config_manager.personas,
+            kind="persona",
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+        )
+        if error:
+            return "", aspect_ratio, resolution, [], [], [], error
         extra_prompt = str(prompt or "").strip()
         if config_manager.match_templates_in_prompt_body:
             (

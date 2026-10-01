@@ -21,6 +21,18 @@ if TYPE_CHECKING:
 LOG = log_prefix("Reference")
 MAX_CONTEXT_IMAGE_SCAN_MESSAGES = 20
 
+# Reference sources stay in separate collectors. Add a source only in the
+# collector that already owns it; do not merge these rules behind switches.
+#
+# | Source | Command | Tool | Current-message cache |
+# | --- | --- | --- | --- |
+# | Current image | yes | only with use_context_images | stores direct images |
+# | Replied image | yes | only with use_context_images | no |
+# | Mention avatar | yes | only avatar_references IDs | no |
+# | Explicit URL/path | no | reference_images | no |
+# | Persona image | supplied names | supplied names | no |
+# | Recent context cache | no | fallback for use_context_images | owner |
+
 
 class ContextReferenceImageNotFoundError(Exception):
     """Raised when an image edit requested chat context but none was usable."""

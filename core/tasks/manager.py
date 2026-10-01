@@ -100,7 +100,6 @@ class TaskManager(
         persistence_file: str | Path | None = None,
     ):
         self.background_tasks: set[asyncio.Task] = set()
-        self._loop_tasks: dict[str, asyncio.Task] = {}
         self._daily_tasks: dict[str, asyncio.Task] = {}
         self._last_run_dates: dict[str, str] = {}
         self._startup_tasks: list[
@@ -183,6 +182,7 @@ class TaskManager(
         preset_label: str = "预设",
         usage_scope: str = "",
         reserved_count: int = 0,
+        quota_date: str = "",
         is_usage_limit_admin: bool = False,
         terminal_callback: GenerationTaskCallback | None = None,
     ) -> GenerationTaskRecord:
@@ -220,6 +220,7 @@ class TaskManager(
                 for index in range(1, safe_requested_count + 1)
             },
             usage_scope=usage_scope,
+            quota_date=str(quota_date or "").strip(),
             reserved_count=max(0, reserved_count),
             is_usage_limit_admin=bool(is_usage_limit_admin),
         )
@@ -243,8 +244,13 @@ class TaskManager(
         )
         return record
 
-    def load_generation_history(self) -> None:
-        """Load persisted generation task history from disk."""
+    def load_generation_history(self, usage_manager: Any | None = None) -> None:
+        """Load persisted generation task history from disk.
+
+        Args:
+            usage_manager: Optional quota manager. When provided, unsettled
+                reservations are restored before interrupted tasks are closed.
+        """
         if not self._enable_generation_task_history:
             logger.debug(f"{LOG} 生图任务历史持久化已关闭，跳过加载")
             return
@@ -254,7 +260,10 @@ class TaskManager(
         restored_tasks: dict[str, GenerationTaskRecord] = {}
         history_changed = False
         now = datetime.now()
-        for record in self._generation_store.load():
+        loaded_records = self._generation_store.load()
+        if usage_manager is not None:
+            history_changed = bool(usage_manager.restore_reservations(loaded_records))
+        for record in loaded_records:
             if record.status in ACTIVE_GENERATION_STATUSES:
                 record.status = GenerationTaskStatus.CANCELLED
                 record.message = "插件重启导致任务中断"
@@ -283,10 +292,6 @@ class TaskManager(
         if history_changed:
             self._save_generation_tasks()
         logger.info(f"{LOG} 已加载生图任务历史: {len(self._generation_tasks)} 条")
-
-    def flush_generation_history(self) -> None:
-        """Persist the current generation task history immediately."""
-        self._save_generation_tasks()
 
     def configure_generation_history(
         self,
@@ -663,29 +668,6 @@ class TaskManager(
 
         self.mark_generation_task_cancelled(task_id)
         return True, f"✅ 任务已取消: {task_id}"
-
-    def cleanup_generation_tasks(self, *, unified_msg_origin: str | None = None) -> int:
-        """Remove finished generation task records."""
-        removed = 0
-        for task_id, record in list(self._generation_tasks.items()):
-            if record.is_active:
-                continue
-            if (
-                unified_msg_origin is not None
-                and record.unified_msg_origin != unified_msg_origin
-            ):
-                continue
-            del self._generation_tasks[task_id]
-            self._generation_terminal_callbacks.pop(task_id, None)
-            self._generation_done_callbacks.pop(task_id, None)
-            self._generation_done_events.pop(task_id, None)
-            self._generation_terminal_notifying.discard(task_id)
-            self._generation_terminal_notified.discard(task_id)
-            self._generation_notification_tasks.pop(task_id, None)
-            removed += 1
-        if removed:
-            self._save_generation_tasks()
-        return removed
 
     def _trim_generation_history(self) -> bool:
         """Keep finished task history bounded while preserving active tasks."""

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import base64
 import hashlib
 import json
 import re
@@ -457,6 +458,29 @@ class BaseImageAdapter(abc.ABC):
         return not any(
             keyword in normalized_error for keyword in self.non_retryable_error_keywords
         )
+
+    def _decode_base64_image(
+        self, value: Any, task_id: str | None = None
+    ) -> bytes | None:
+        """Decode a raw Base64 image or a data URL.
+
+        Args:
+            value: Provider image field, either raw Base64 or a data URL.
+            task_id: Optional task ID included in decode warnings.
+
+        Returns:
+            Decoded image bytes, or None when the value is not valid Base64.
+        """
+        data = str(value or "")
+        if ";base64," in data:
+            _, _, data = data.partition(";base64,")
+        try:
+            return base64.b64decode(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                f"{self._get_log_prefix(task_id)} Base64 解码失败: {safe_log_error_body(exc)}"
+            )
+            return None
 
     def _extract_status_code(self, error: str) -> int | None:
         """Extract an HTTP status code from a normalized adapter error."""

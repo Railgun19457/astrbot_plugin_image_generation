@@ -183,7 +183,7 @@ class GenerationExecutor:
                 deliver_via_ai,
                 auto_send,
             )
-        except (asyncio.CancelledError, Exception):
+        except Exception:
             self.release_generation_task_quota_once(task_id)
             raise
 
@@ -205,6 +205,7 @@ class GenerationExecutor:
             record.usage_scope,
             is_admin=record.is_usage_limit_admin,
             count=record.reserved_count,
+            quota_date=record.quota_date,
         )
         self.task_manager.mark_generation_task_quota_released(task_id)
 
@@ -228,6 +229,7 @@ class GenerationExecutor:
             is_admin=record.is_usage_limit_admin,
             reserved_count=record.reserved_count,
             actual_count=actual_count,
+            quota_date=record.quota_date,
         )
         self.task_manager.mark_generation_task_quota_settled(task_id)
 
@@ -445,9 +447,7 @@ class GenerationExecutor:
                         task_id=task_id,
                         batch_index=current_index,
                         batch_count=image_count,
-                        retry_status_callback=lambda retry_attempt,
-                        max_retry_attempts,
-                        current_index=current_index: (
+                        retry_status_callback=lambda retry_attempt, max_retry_attempts, current_index=current_index: (
                             self.task_manager.update_generation_task_retry_status(
                                 task_id,
                                 current_index=current_index,

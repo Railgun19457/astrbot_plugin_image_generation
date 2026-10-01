@@ -404,16 +404,6 @@ def format_optional(value: object, empty: str = "无", limit: int = 120) -> str:
     return text if text else empty
 
 
-def format_log_fields(**fields: object) -> str:
-    """Format optional key-value fields for debug logs."""
-    parts: list[str] = []
-    for key, value in fields.items():
-        if value is None or value == "":
-            continue
-        parts.append(f"{key}={safe_log_text(value, 160)}")
-    return ", ".join(parts)
-
-
 def format_cn_log_fields(**fields: object) -> str:
     """Format optional fields with Chinese labels for readable logs."""
     parts: list[str] = []

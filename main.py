@@ -15,6 +15,10 @@ from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.star.star_tools import StarTools
 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
+from .core.adapters.generator import ImageGenerator
+from .core.api.public import ImageGenerationPublicAPI
+from .core.audit.safety import SafetyAuditor
+from .core.commands import CommandHandlerMixin
 from .core.config.manager import (
     LLM_TOOL_IMAGE_GENERATION,
     LLM_TOOL_PRESET_EDIT,
@@ -22,19 +26,12 @@ from .core.config.manager import (
     LLM_TOOL_TASK_MANAGEMENT,
     ConfigManager,
 )
+from .core.config.templates import format_template_summary
 from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
-from .core.generation.options import (
-    parse_generation_options,
-    split_trailing_count_token,
-)
-from .core.tasks.models import (
-    GenerationTaskCreationError,
-    GenerationTaskRecord,
-    GenerationTaskStatus,
-)
-from .core.adapters.generator import ImageGenerator
 from .core.generation.image_processor import ImageProcessor
+from .core.generation.options import parse_generation_options
+from .core.generation.reference_collector import collect_command_reference_images
 from .core.llm.result_handler import LLMResultHandler
 from .core.llm.tools import (
     ImageGenerationTool,
@@ -43,44 +40,27 @@ from .core.llm.tools import (
     PresetQueryTool,
     adjust_tool_parameters,
 )
+from .core.page import ImageGenerationPageAPI
 from .core.shared.logging import (
     log_prefix,
     mask_sensitive,
     safe_log_error_body,
     safe_log_text,
 )
-from .core.api.public import ImageGenerationPublicAPI
-from .core.generation.reference_collector import collect_command_reference_images
-from .core.formatting.result import (
-    format_image_command_help as render_image_command_help,
-)
-from .core.formatting.result import (
-    format_start_task_message as render_start_task_message,
-)
-from .core.formatting.result import (
-    format_task_detail as render_task_detail,
-)
-from .core.formatting.result import (
-    format_task_list as render_task_list,
-)
-from .core.audit.safety import SafetyAuditor
-from .core.page import ImageGenerationPageAPI
+from .core.shared.types import ImageCapability, ImageData
 from .core.tasks.ids import new_task_id
 from .core.tasks.manager import TaskManager
-from .core.config.templates import (
-    build_generation_prompt,
-    extract_templates_from_prompt,
-    find_named_entry,
-    format_template_summary,
-    parse_preset_prompt,
+from .core.tasks.models import (
+    GenerationTaskCreationError,
+    GenerationTaskRecord,
+    GenerationTaskStatus,
 )
-from .core.shared.types import ImageCapability, ImageData
 from .core.tasks.usage import UsageManager
 
 LOG = log_prefix("Plugin")
 
 
-class ImageGenerationPlugin(Star):
+class ImageGenerationPlugin(CommandHandlerMixin, Star):
     """Main image generation plugin class."""
 
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -171,7 +151,7 @@ class ImageGenerationPlugin(Star):
         else:
             logger.error(f"{LOG} 适配器配置加载失败，插件未初始化")
 
-        self.task_manager.load_generation_history()
+        self.task_manager.load_generation_history(self.usage_manager)
         self.task_manager.configure_generation_queue(
             max_queued_generation_tasks=self.config_manager.max_queued_generation_tasks
         )
@@ -410,6 +390,13 @@ class ImageGenerationPlugin(Star):
                 personas or [],
             )
         image_count = self.normalize_image_count(image_count)
+        quota_date = ""
+        if unified_msg_origin and image_count > 0:
+            quota_date = self.usage_manager.reserve_usage(
+                unified_msg_origin,
+                image_count,
+                is_admin=is_usage_limit_admin,
+            )
 
         def _generation_coro_factory():
             return self.generation_executor.generate_and_send_image_async(
@@ -446,17 +433,25 @@ class ImageGenerationPlugin(Star):
                 preset=preset,
                 preset_label=preset_label,
                 usage_scope=unified_msg_origin,
-                reserved_count=image_count if unified_msg_origin else 0,
+                reserved_count=image_count if quota_date else 0,
+                quota_date=quota_date,
                 is_usage_limit_admin=is_usage_limit_admin,
                 terminal_callback=self._handle_generation_task_terminal,
             )
         except GenerationTaskCreationError:
-            self.usage_manager.release_reserved_usage(
-                unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-                count=image_count,
-            )
+            if quota_date:
+                self.usage_manager.release_reserved_usage(
+                    unified_msg_origin,
+                    is_admin=is_usage_limit_admin,
+                    count=image_count,
+                    quota_date=quota_date,
+                )
             raise
+        # Start the cooldown window only after the task is actually accepted.
+        self.usage_manager.record_request_timestamp(
+            unified_msg_origin,
+            is_admin=is_usage_limit_admin,
+        )
         if source == "LLM工具":
             self.llm_result_handler.attach_task_wakeup(
                 record,
@@ -484,229 +479,13 @@ class ImageGenerationPlugin(Star):
         }:
             self.generation_executor.release_generation_task_quota_once(record.task_id)
 
-    def is_usage_limit_admin(self, event: AstrMessageEvent) -> bool:
-        """Return whether an event sender is an AstrBot admin for usage limits."""
-        try:
-            return bool(event.is_admin())
-        except Exception as exc:
-            logger.debug(f"{LOG} 获取管理员状态失败: {exc}")
-            return False
-
-    def normalize_image_count(self, value: Any) -> int:
-        """Normalize requested image count using configured bounds."""
-        try:
-            count = int(value)
-        except (TypeError, ValueError):
-            count = self.config_manager.default_image_count
-        return max(1, min(count, self.config_manager.max_image_count))
-
-    def _parse_command_image_count(self, prompt: str) -> tuple[int, str]:
-        """Parse optional image count from command prompt suffix."""
-        raw_prompt = prompt.strip()
-        default_count = self.config_manager.default_image_count
-        if not raw_prompt:
-            return default_count, ""
-
-        remainder, count_token = split_trailing_count_token(raw_prompt)
-        if count_token is None:
-            return default_count, raw_prompt
-        return self.normalize_image_count(count_token), remainder
-
-    def _parse_command_prompt_templates(
-        self,
-        prompt: str,
-        aspect_ratio: str,
-        resolution: str,
-    ) -> tuple[str, str, str, list[str], list[str], list[tuple[str, str]]]:
-        """Apply command prompt templates by leading tokens or optional body match.
-
-        Args:
-            prompt: Command prompt after image-count suffix parsing.
-            aspect_ratio: Current aspect ratio, updated by JSON presets.
-            resolution: Current resolution, updated by JSON presets.
-
-        Returns:
-            Final prompt, aspect ratio, resolution, matched preset names,
-            matched persona names, and persona reference images.
-        """
-        raw_prompt = prompt.strip()
-        if not raw_prompt:
-            return "", aspect_ratio, resolution, [], [], []
-
-        if self.config_manager.match_templates_in_prompt_body:
-            (
-                extra_content,
-                aspect_ratio,
-                resolution,
-                preset_prompts,
-                persona_prompts,
-                matched_presets,
-                matched_personas,
-                persona_images,
-            ) = extract_templates_from_prompt(
-                raw_prompt,
-                self.config_manager.prompt_body_presets(),
-                self.config_manager.prompt_body_personas(),
-                aspect_ratio=aspect_ratio,
-                resolution=resolution,
-            )
-            if not matched_presets and not matched_personas:
-                return raw_prompt, aspect_ratio, resolution, [], [], []
-            return (
-                build_generation_prompt(
-                    preset_prompts=preset_prompts,
-                    persona_prompts=persona_prompts,
-                    extra_prompt=extra_content,
-                ),
-                aspect_ratio,
-                resolution,
-                matched_presets,
-                matched_personas,
-                persona_images,
-            )
-
-        tokens = raw_prompt.split()
-        preset_prompts: list[str] = []
-        persona_prompts: list[str] = []
-        matched_presets: list[str] = []
-        matched_personas: list[str] = []
-        persona_images: list[tuple[str, str]] = []
-        extra_content = ""
-
-        for index, token in enumerate(tokens):
-            matched_preset = find_named_entry(self.config_manager.presets, token)
-            if matched_preset:
-                preset_prompt, aspect_ratio, resolution = parse_preset_prompt(
-                    self.config_manager.presets[matched_preset],
-                    aspect_ratio,
-                    resolution,
-                )
-                if preset_prompt:
-                    preset_prompts.append(preset_prompt)
-                matched_presets.append(matched_preset)
-                continue
-
-            matched_persona = find_named_entry(
-                self.config_manager.personas,
-                token,
-            )
-            if matched_persona:
-                persona = self.config_manager.personas[matched_persona]
-                persona_prompt = persona.prompt.strip()
-                if persona_prompt:
-                    persona_prompts.append(persona_prompt)
-                if persona.image:
-                    persona_images.append((matched_persona, persona.image))
-                matched_personas.append(matched_persona)
-                continue
-
-            extra_content = " ".join(tokens[index:]).strip()
-            break
-
-        if not matched_presets and not matched_personas:
-            return raw_prompt, aspect_ratio, resolution, [], [], []
-
-        return (
-            build_generation_prompt(
-                preset_prompts=preset_prompts,
-                persona_prompts=persona_prompts,
-                extra_prompt=extra_content,
-            ),
-            aspect_ratio,
-            resolution,
-            matched_presets,
-            matched_personas,
-            persona_images,
-        )
-
-    def format_start_task_message(
-        self,
-        *,
-        prompt: str,
-        reference_image_count: int,
-        image_count: int,
-        preset: str | None,
-        preset_label: str = "预设",
-        presets: list[str] | None = None,
-        personas: list[str] | None = None,
-        aspect_ratio: str,
-        resolution: str,
-        task_id: str,
-    ) -> str:
-        """Render start-task message from configured template."""
-        return render_start_task_message(
-            self.config_manager,
-            prompt=prompt,
-            reference_image_count=reference_image_count,
-            image_count=image_count,
-            preset=preset,
-            preset_label=preset_label,
-            presets=presets,
-            personas=personas,
-            aspect_ratio=aspect_ratio,
-            resolution=resolution,
-            task_id=task_id,
-        )
-
-    def format_task_detail(self, record: GenerationTaskRecord) -> str:
-        """Format one task record for command output."""
-        return render_task_detail(record)
-
-    def format_task_list(self, records: list[GenerationTaskRecord]) -> str:
-        """Format a compact task list for command output."""
-        return render_task_list(records)
-
-    def format_image_command_help(self) -> str:
-        """Format help text for the image generation command."""
-        return render_image_command_help(self.config_manager)
-
-    def resolve_task_reference(
-        self,
-        unified_msg_origin: str,
-        task_ref: str,
-        *,
-        include_finished: bool = False,
-    ) -> GenerationTaskRecord | None:
-        """Resolve a task id or active list number into a task for one session."""
-        task_ref = task_ref.strip()
-        if not task_ref:
-            return None
-
-        active_records = self.task_manager.list_generation_tasks(
-            unified_msg_origin=unified_msg_origin,
-            include_finished=False,
-            limit=10,
-        )
-        if task_ref.isdigit():
-            index = int(task_ref) - 1
-            if 0 <= index < len(active_records):
-                return active_records[index]
-
-        for record in active_records:
-            if record.task_id == task_ref:
-                return record
-
-        if include_finished:
-            record = self.task_manager.get_generation_task(task_ref)
-            if record and record.unified_msg_origin == unified_msg_origin:
-                return record
-        return None
-
-    def resolve_active_task_reference(
-        self, unified_msg_origin: str, task_ref: str
-    ) -> GenerationTaskRecord | None:
-        """Resolve a task id or list number into an active task for one session."""
-        return self.resolve_task_reference(
-            unified_msg_origin,
-            task_ref,
-            include_finished=False,
-        )
-
     # Command handlers.
 
     @filter.command("生图任务")
     async def image_task_command(self, event: AstrMessageEvent, task_id: str = ""):
         """Show image generation tasks or one task detail."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         task_id = (task_id or "").strip()
 
@@ -744,6 +523,8 @@ class ImageGenerationPlugin(Star):
         self, event: AstrMessageEvent, task_id: str = ""
     ):
         """Cancel one image generation task."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         task_id = (task_id or "").strip()
         if not task_id:
             active_records = self.task_manager.list_generation_tasks(
@@ -780,6 +561,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图")
     async def generate_image_command(self, event: AstrMessageEvent):
         """Handle the image generation command."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         is_usage_limit_admin = self.is_usage_limit_admin(event)
 
@@ -842,7 +625,6 @@ class ImageGenerationPlugin(Star):
             user_id,
             is_admin=is_usage_limit_admin,
             requested_count=image_count,
-            update_timestamp=False,
         )
         if isinstance(check_result, str):
             if check_result:
@@ -873,7 +655,6 @@ class ImageGenerationPlugin(Star):
             if check_result:
                 yield event.plain_result(check_result)
             return
-        usage_reserved = True
         task_created = False
 
         task_id = new_task_id()
@@ -901,45 +682,46 @@ class ImageGenerationPlugin(Star):
 
             reference_image_count = len(images_data or [])
 
-            try:
-                self.create_generation_task(
-                    task_id=task_id,
-                    source="指令",
-                    prompt=prompt,
-                    images_data=images_data,
-                    unified_msg_origin=event.unified_msg_origin,
-                    aspect_ratio=aspect_ratio,
-                    resolution=resolution,
-                    image_count=image_count,
-                    is_usage_limit_admin=is_usage_limit_admin,
-                    preset=preset_or_persona,
-                    preset_label=preset_label,
-                    presets=matched_presets,
-                    personas=matched_personas,
-                )
-                task_created = True
-            except GenerationTaskCreationError:
-                # create_generation_task() rolls back quota reservation on creation failure.
-                usage_reserved = False
-                raise
+            self.create_generation_task(
+                task_id=task_id,
+                source="指令",
+                prompt=prompt,
+                images_data=images_data,
+                unified_msg_origin=event.unified_msg_origin,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
+                image_count=image_count,
+                is_usage_limit_admin=is_usage_limit_admin,
+                preset=preset_or_persona,
+                preset_label=preset_label,
+                presets=matched_presets,
+                personas=matched_personas,
+            )
+            task_created = True
         except asyncio.CancelledError:
-            if usage_reserved and not task_created:
-                self.usage_manager.release_reserved_usage(
-                    user_id,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                )
+            if not task_created:
+                record = self.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    self.usage_manager.release_reserved_usage(
+                        user_id,
+                        is_admin=is_usage_limit_admin,
+                        count=image_count,
+                        quota_date=record.quota_date,
+                    )
             raise
         except GenerationTaskCreationError as exc:
             yield event.plain_result(f"❌ 生图任务提交失败: {exc.message}")
             return
         except Exception as exc:
-            if usage_reserved and not task_created:
-                self.usage_manager.release_reserved_usage(
-                    user_id,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                )
+            if not task_created:
+                record = self.task_manager.get_generation_task(task_id)
+                if record and record.quota_date:
+                    self.usage_manager.release_reserved_usage(
+                        user_id,
+                        is_admin=is_usage_limit_admin,
+                        count=image_count,
+                        quota_date=record.quota_date,
+                    )
             logger.error(
                 f"{log_prefix('Task', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
                 exc_info=True,
@@ -967,6 +749,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("生图模型")
     async def model_command(self, event: AstrMessageEvent, model_index: str = ""):
         """Switch the active image generation model."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         if not self.config_manager.adapter_config:
             yield event.plain_result("❌ 适配器未初始化")
             return
@@ -1014,6 +798,8 @@ class ImageGenerationPlugin(Star):
     @filter.command("预设")
     async def preset_command(self, event: AstrMessageEvent):
         """Manage image generation presets."""
+        # Command replies must not fall through to the default LLM request.
+        event.stop_event()
         user_id = event.unified_msg_origin
         masked_uid = mask_sensitive(user_id)
         message_str = (event.message_str or "").strip()

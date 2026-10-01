@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import time
+from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from astrbot.api import logger
 
@@ -18,6 +20,9 @@ if TYPE_CHECKING:
 
 
 LOG = log_prefix("Usage")
+
+# Trim expired cooldown entries once the tracker grows past this size.
+_MAX_COOLDOWN_ENTRIES = 4096
 
 
 class UsageManager:
@@ -76,17 +81,49 @@ class UsageManager:
         return datetime.date.today().isoformat()
 
     def _get_reserved_usage(self, date: str, user_id: str) -> int:
-        """Return pending reserved usage for one user."""
+        """Return pending reserved usage for one user on one quota date."""
         return self._usage_reservations.get(date, {}).get(user_id, 0)
 
     def _reserve_usage(self, date: str, user_id: str, count: int) -> None:
         """Reserve quota before an async generation task starts."""
         count = max(0, count)
-        if count <= 0:
+        user_id = str(user_id or "").strip()
+        if count <= 0 or not user_id:
             return
         self._usage_reservations.setdefault(date, {})[user_id] = (
             self._get_reserved_usage(date, user_id) + count
         )
+
+    def reserve_usage(
+        self,
+        user_id: str,
+        count: int,
+        *,
+        is_admin: bool = False,
+        quota_date: str = "",
+    ) -> str:
+        """Reserve quota and return the date key that owns the reservation.
+
+        Args:
+            user_id: Usage scope being charged.
+            count: Number of images to reserve.
+            is_admin: Whether the caller bypasses configured limits.
+            quota_date: Existing quota date to restore. Empty uses today.
+
+        Returns:
+            Date key for a real reservation, otherwise an empty string.
+        """
+        if not self._settings.enable_daily_limit:
+            return ""
+        if self.is_limit_exempt(user_id, is_admin=is_admin):
+            return ""
+        user_id = str(user_id or "").strip()
+        count = max(0, count)
+        if not user_id or count <= 0:
+            return ""
+        date = quota_date.strip() or self._today()
+        self._reserve_usage(date, user_id, count)
+        return date
 
     def is_session_blocked(self, user_id: str) -> bool:
         """Check whether the current session UMO is blocked."""
@@ -110,15 +147,20 @@ class UsageManager:
         *,
         is_admin: bool = False,
         requested_count: int = 1,
-        update_timestamp: bool = True,
     ) -> bool | str:
         """Check per-user cooldowns and daily quota limits.
+
+        This is a read-only check. Callers start the cooldown window with
+        ``record_request_timestamp`` only after a task is accepted, so rejected
+        requests do not extend the current cooldown.
 
         Returns:
             True when checks pass, otherwise a user-facing error message.
 
         Args:
-            update_timestamp: Whether to reserve the cooldown when checks pass.
+            user_id: Usage scope being checked.
+            is_admin: Whether the caller bypasses configured limits.
+            requested_count: Number of images the request would consume.
         """
         user_id = str(user_id or "").strip()
 
@@ -130,13 +172,10 @@ class UsageManager:
             return self._settings.blacklist_block_message
 
         if self._settings.rate_limit_seconds > 0:
-            now = time.time()
-            last_ts = self._user_request_timestamps.get(user_id, 0)
-            if now - last_ts < self._settings.rate_limit_seconds:
-                remaining = int(self._settings.rate_limit_seconds - (now - last_ts))
+            elapsed = time.time() - self._user_request_timestamps.get(user_id, 0)
+            if elapsed < self._settings.rate_limit_seconds:
+                remaining = math.ceil(self._settings.rate_limit_seconds - elapsed)
                 return f"❌ 请求过于频繁，请在 {remaining} 秒后再试"
-            if update_timestamp:
-                self._user_request_timestamps[user_id] = now
 
         # Check daily quota limits.
         if self._settings.enable_daily_limit:
@@ -159,30 +198,61 @@ class UsageManager:
                     f"❌ 今日剩余生图额度不足，剩余 {remaining} 张，"
                     f"本次请求 {requested_count} 张"
                 )
-            if update_timestamp:
-                self._reserve_usage(today, user_id, requested_count)
 
         return True
 
-    def record_usage(
+    def record_request_timestamp(
         self,
         user_id: str,
         *,
         is_admin: bool = False,
-        count: int = 1,
     ) -> None:
-        """Record generated image usage for one user."""
-        if not self._settings.enable_daily_limit:
+        """Start a new cooldown window for one accepted request.
+
+        Args:
+            user_id: Usage scope whose cooldown should be refreshed.
+            is_admin: Whether the caller bypasses configured limits.
+        """
+        if self._settings.rate_limit_seconds <= 0:
+            return
+        user_id = str(user_id or "").strip()
+        if not user_id or self.is_limit_exempt(user_id, is_admin=is_admin):
             return
 
-        count = max(1, count)
-        today = self._today()
-        if today not in self._usage_data:
-            self._usage_data[today] = {}
-        self._usage_data[today][user_id] = (
-            self._usage_data[today].get(user_id, 0) + count
-        )
-        self._save_usage_data()
+        now = time.time()
+        if len(self._user_request_timestamps) >= _MAX_COOLDOWN_ENTRIES:
+            self._prune_cooldown_timestamps(now)
+        self._user_request_timestamps[user_id] = now
+
+    def _prune_cooldown_timestamps(self, now: float) -> None:
+        """Keep the cooldown tracker bounded.
+
+        Expired windows are dropped first. When every tracked window is still
+        active, a short ``rate_limit_seconds`` would otherwise let the map grow
+        without bound, so the oldest half is evicted as well.
+
+        Args:
+            now: Current monotonic reference used for expiry comparison.
+        """
+        cutoff = now - self._settings.rate_limit_seconds
+        for tracked_user_id in [
+            tracked
+            for tracked, timestamp in self._user_request_timestamps.items()
+            if timestamp < cutoff
+        ]:
+            del self._user_request_timestamps[tracked_user_id]
+
+        # Evict in batches so sorting does not run on every single write.
+        target_size = _MAX_COOLDOWN_ENTRIES // 2
+        overflow = len(self._user_request_timestamps) - target_size
+        if overflow <= 0:
+            return
+        oldest_user_ids = sorted(
+            self._user_request_timestamps,
+            key=self._user_request_timestamps.__getitem__,
+        )[:overflow]
+        for tracked_user_id in oldest_user_ids:
+            del self._user_request_timestamps[tracked_user_id]
 
     def release_reserved_usage(
         self,
@@ -190,8 +260,16 @@ class UsageManager:
         *,
         is_admin: bool = False,
         count: int = 1,
+        quota_date: str = "",
     ) -> None:
-        """Release previously reserved quota without recording usage."""
+        """Release previously reserved quota without recording usage.
+
+        Args:
+            user_id: Usage scope whose reservation should shrink.
+            is_admin: Whether the original reservation bypassed limits.
+            count: Number of reserved images to release.
+            quota_date: Date key returned when the quota was reserved.
+        """
         if not self._settings.enable_daily_limit:
             return
         if self.is_limit_exempt(user_id, is_admin=is_admin):
@@ -201,8 +279,8 @@ class UsageManager:
         if not user_id:
             return
 
-        today = self._today()
-        reservations = self._usage_reservations.get(today)
+        date = quota_date.strip() or self._today()
+        reservations = self._usage_reservations.get(date)
         if not reservations or user_id not in reservations:
             return
 
@@ -213,7 +291,7 @@ class UsageManager:
 
         del reservations[user_id]
         if not reservations:
-            del self._usage_reservations[today]
+            del self._usage_reservations[date]
 
     def settle_usage(
         self,
@@ -222,8 +300,18 @@ class UsageManager:
         is_admin: bool = False,
         reserved_count: int = 0,
         actual_count: int = 0,
+        quota_date: str = "",
     ) -> None:
-        """Record actual usage and release the matching reservation."""
+        """Record actual usage and release the matching reservation.
+
+        Args:
+            user_id: Usage scope being charged.
+            is_admin: Whether the caller bypasses configured limits.
+            reserved_count: Number of images originally reserved.
+            actual_count: Number of images that should count as used.
+            quota_date: Date key that owns both the usage and reservation.
+                Empty uses today, including legacy tasks restored without one.
+        """
         if not self._settings.enable_daily_limit:
             return
 
@@ -231,13 +319,13 @@ class UsageManager:
         if not user_id:
             return
 
+        date = quota_date.strip() or self._today()
         actual_count = max(0, actual_count)
         if actual_count:
-            today = self._today()
-            if today not in self._usage_data:
-                self._usage_data[today] = {}
-            self._usage_data[today][user_id] = (
-                self._usage_data[today].get(user_id, 0) + actual_count
+            if date not in self._usage_data:
+                self._usage_data[date] = {}
+            self._usage_data[date][user_id] = (
+                self._usage_data[date].get(user_id, 0) + actual_count
             )
             self._save_usage_data()
 
@@ -245,7 +333,72 @@ class UsageManager:
             user_id,
             is_admin=is_admin,
             count=max(0, reserved_count),
+            quota_date=date,
         )
+
+    def restore_reservations(self, records: Iterable[Any]) -> bool:
+        """Rebuild in-memory reservations from tasks that were not settled.
+
+        Args:
+            records: Restored generation task records. Active tasks recover
+                their original reservation. Interrupted tasks are charged for
+                images that were already produced.
+        """
+        if not self._settings.enable_daily_limit:
+            return False
+
+        restored = 0
+        settled = 0
+        changed = False
+        for record in records:
+            if getattr(record, "quota_settled", False) or getattr(
+                record, "quota_released", False
+            ):
+                continue
+            scope = str(getattr(record, "usage_scope", "") or "").strip()
+            reserved_count = max(0, int(getattr(record, "reserved_count", 0) or 0))
+            if not scope or reserved_count <= 0:
+                continue
+            if getattr(record, "is_usage_limit_admin", False) and self.is_limit_exempt(
+                scope,
+                is_admin=True,
+            ):
+                continue
+
+            quota_date = str(getattr(record, "quota_date", "") or "").strip()
+            if not quota_date:
+                created_at = getattr(record, "created_at", None)
+                quota_date = (
+                    created_at.date().isoformat()
+                    if isinstance(created_at, datetime.datetime)
+                    else self._today()
+                )
+                changed = True
+                record.quota_date = quota_date
+
+            if getattr(record, "is_active", False):
+                self._reserve_usage(quota_date, scope, reserved_count)
+                restored += 1
+                continue
+
+            actual_count = max(0, int(getattr(record, "result_count", 0) or 0))
+            self.settle_usage(
+                scope,
+                is_admin=bool(getattr(record, "is_usage_limit_admin", False)),
+                reserved_count=0,
+                actual_count=actual_count,
+                quota_date=quota_date,
+            )
+            record.quota_settled = True
+            record.quota_released = True
+            changed = True
+            settled += 1
+
+        if restored or settled:
+            logger.info(
+                f"{LOG} 已恢复生图额度预留: 进行中={restored}，已结算中断任务={settled}"
+            )
+        return changed
 
     def get_usage_count(self, user_id: str) -> int:
         """Return today's usage count for one user."""
