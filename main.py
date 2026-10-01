@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
@@ -59,19 +58,6 @@ from .core.tasks.models import (
 from .core.tasks.usage import UsageManager
 
 _COMMAND_NAMES = ("生图任务", "生图取消", "生图模型", "生图", "预设")
-
-
-def _matches_registered_command(message: str, command: str) -> bool:
-    """Return whether a normalized message invokes one registered command.
-
-    AstrBot matches command prefixes in handler registration order. A shorter
-    command can therefore consume a longer sibling after a plugin reload.
-    """
-    normalized = re.sub(r"\s+", " ", message.strip())
-    for name in sorted(_COMMAND_NAMES, key=len, reverse=True):
-        if normalized == name or normalized.startswith(f"{name} "):
-            return name == command
-    return False
 
 
 LOG = log_prefix("Plugin")
@@ -501,8 +487,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
     @filter.command("生图任务")
     async def image_task_command(self, event: AstrMessageEvent, task_id: str = ""):
         """Show image generation tasks or one task detail."""
-        if not _matches_registered_command(event.message_str or "", "生图任务"):
-            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin
@@ -542,8 +526,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         self, event: AstrMessageEvent, task_id: str = ""
     ):
         """Cancel one image generation task."""
-        if not _matches_registered_command(event.message_str or "", "生图取消"):
-            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         task_id = (task_id or "").strip()
@@ -582,8 +564,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
     @filter.command("生图")
     async def generate_image_command(self, event: AstrMessageEvent):
         """Handle the image generation command."""
-        if not _matches_registered_command(event.message_str or "", "生图"):
-            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin
@@ -772,8 +752,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
     @filter.command("生图模型")
     async def model_command(self, event: AstrMessageEvent, model_index: str = ""):
         """Switch the active image generation model."""
-        if not _matches_registered_command(event.message_str or "", "生图模型"):
-            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         if not self.config_manager.adapter_config:
@@ -823,8 +801,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
     @filter.command("预设")
     async def preset_command(self, event: AstrMessageEvent):
         """Manage image generation presets."""
-        if not _matches_registered_command(event.message_str or "", "预设"):
-            return
         # Command replies must not fall through to the default LLM request.
         event.stop_event()
         user_id = event.unified_msg_origin
