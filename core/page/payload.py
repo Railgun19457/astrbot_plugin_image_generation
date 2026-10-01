@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ...tasks.models import GenerationTaskRecord
+from ..tasks.models import GenerationTaskRecord
 
 PAGE_IMAGE_MIME_TYPES = {
     ".jpg": "image/jpeg",
