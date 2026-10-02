@@ -150,8 +150,20 @@ class ImageProcessor:
         value: str,
         *,
         workspace_dir: str | None = None,
+        trusted_source: bool = False,
     ) -> str | None:
-        """Resolve a safe local image path inside workspace/temp/plugin data dirs."""
+        """Resolve a local image path.
+
+        Args:
+            value: Local path or ``file://`` URI to resolve.
+            workspace_dir: Session workspace root used for relative paths.
+            trusted_source: Whether the value comes from the framework message
+                chain. Those images were already accepted by the framework, so
+                the allowed directory roots are not enforced for them.
+
+        Returns:
+            The resolved file path, or ``None`` when it is not a readable file.
+        """
         value = self._normalize_local_path_value(value)
         if not value:
             return None
@@ -164,11 +176,13 @@ class ImageProcessor:
         ):
             return None
 
-        allowed_base_dirs = self._allowed_local_base_dirs
-        if workspace_dir:
-            allowed_base_dirs = self._normalize_allowed_base_dirs(
-                (*allowed_base_dirs, workspace_dir)
-            )
+        allowed_base_dirs: tuple[str, ...] = ()
+        if not trusted_source:
+            allowed_base_dirs = self._allowed_local_base_dirs
+            if workspace_dir:
+                allowed_base_dirs = self._normalize_allowed_base_dirs(
+                    (*allowed_base_dirs, workspace_dir)
+                )
         candidates: list[str] = []
         if self._is_absolute_path(value):
             candidates.append(value)
@@ -179,7 +193,9 @@ class ImageProcessor:
 
         for candidate in candidates:
             path = os.path.realpath(candidate)
-            if not self._is_path_within_allowed_dirs(path, allowed_base_dirs):
+            if not trusted_source and not self._is_path_within_allowed_dirs(
+                path, allowed_base_dirs
+            ):
                 logger.warning(
                     f"{LOG} 本地参考图路径不在允许目录内: {safe_log_url(path)}"
                 )
@@ -225,8 +241,20 @@ class ImageProcessor:
         url: str,
         *,
         workspace_dir: str | None = None,
+        trusted_source: bool = False,
     ) -> ImageData | None:
-        """Download or read an image and return normalized image data."""
+        """Download or read an image and return normalized image data.
+
+        Args:
+            url: Network URL, Data URL, ``base64://`` payload, or local path.
+            workspace_dir: Session workspace root used for relative paths.
+            trusted_source: Whether the reference comes from the framework
+                message chain. Such images are accepted as-is instead of being
+                restricted to the allowed local base directories.
+
+        Returns:
+            The normalized image data, or ``None`` when it cannot be used.
+        """
         try:
             url = url.strip()
             if not url:
@@ -247,6 +275,7 @@ class ImageProcessor:
             elif local_path := self._resolve_local_path(
                 url,
                 workspace_dir=workspace_dir,
+                trusted_source=trusted_source,
             ):
                 source_url = None
                 with open(local_path, "rb") as f:
@@ -467,6 +496,7 @@ class ImageProcessor:
             if image := await self.download_image(
                 reference,
                 workspace_dir=workspace_dir,
+                trusted_source=True,
             ):
                 images_data.append(image)
         return images_data
@@ -503,6 +533,7 @@ class ImageProcessor:
                         data := await self.download_image(
                             url,
                             workspace_dir=workspace_dir,
+                            trusted_source=True,
                         )
                     ):
                         images_data.append(data)
@@ -516,6 +547,7 @@ class ImageProcessor:
                                     data := await self.download_image(
                                         url,
                                         workspace_dir=workspace_dir,
+                                        trusted_source=True,
                                     )
                                 ):
                                     images_data.append(data)

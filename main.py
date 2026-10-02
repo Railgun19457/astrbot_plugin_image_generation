@@ -229,6 +229,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             if image := await self.image_processor.download_image(
                 reference,
                 workspace_dir=workspace_dir,
+                trusted_source=True,
             ):
                 images.append(image)
         if not images:
