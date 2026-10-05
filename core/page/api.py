@@ -491,6 +491,7 @@ class ImageGenerationPageAPI(PagePayloadMixin, PageStatsMixin):
             target.relative_to(self.plugin.page_upload_dir.resolve())
         except ValueError:
             return error_response("上传路径无效", status_code=400)
+        self.plugin.page_upload_dir.mkdir(parents=True, exist_ok=True)
         with target.open("wb") as output:
             output.write(data)
         return json_response(
