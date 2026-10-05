@@ -287,6 +287,7 @@ class ImageProcessor:
                 # Use the plugin temporary directory for downloaded references.
                 file_name = f"ref_{hashlib.md5(url.encode()).hexdigest()[:10]}"
                 path = os.path.join(self._temp_dir, file_name)
+                os.makedirs(self._temp_dir, exist_ok=True)
                 path = await download_image_by_url(url, path=path)
                 if path:
                     with open(path, "rb") as f:
@@ -389,6 +390,7 @@ class ImageProcessor:
         try:
             file_name = f"avatar_{user_id}.jpg"
             path = os.path.join(self._temp_dir, file_name)
+            os.makedirs(self._temp_dir, exist_ok=True)
             path = await download_image_by_url(url, path=path)
             if path:
                 with open(path, "rb") as f:
@@ -584,6 +586,7 @@ class ImageProcessor:
             extension = GENERATED_IMAGE_EXTENSIONS.get(mime, ".png")
             file_name = f"gen_{task_id}_{int(time.time())}_{hashlib.md5(img_bytes).hexdigest()[:6]}{extension}"
             file_path = os.path.join(self._temp_dir, file_name)
+            os.makedirs(self._temp_dir, exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(img_bytes)
             return file_path
