@@ -467,6 +467,117 @@ class ImageProcessor:
                     references.append(str(url).strip())
         return list(dict.fromkeys(references))
 
+    async def collect_forward_card_text(self, event: AstrMessageEvent) -> str:
+        """Return the text inside a merged-forward card, one level only.
+
+        ``Node``/``Nodes`` carry their content inline, so those are read directly.
+        ``Forward`` only carries an id, so it is fetched once via
+        ``get_forward_msg``. Nested forwards inside that content are not entered.
+        """
+        if not event.message_obj or not event.message_obj.message:
+            return ""
+
+        node_cls = getattr(Comp, "Node", None)
+        nodes_cls = getattr(Comp, "Nodes", None)
+        if node_cls is None and nodes_cls is None:
+            return ""
+
+        # 一、引用（Reply）路径：卡片通常是被"回复"引用的，交给框架自带的解析器，
+        #    它会依次尝试内联链 -> get_msg -> get_forward_msg。
+        reply_text = await self._quoted_reply_text(event)
+        if reply_text:
+            return reply_text
+
+        texts: list[str] = []
+        for component in event.message_obj.message:
+            if nodes_cls is not None and isinstance(component, nodes_cls):
+                nodes = list(getattr(component, "nodes", None) or [])
+            elif node_cls is not None and isinstance(component, node_cls):
+                nodes = [component]
+            else:
+                continue
+            for node in nodes:
+                for segment in getattr(node, "content", None) or []:
+                    # 只解析一层：content 里若还嵌 Node/Nodes，不再深入
+                    if isinstance(segment, Comp.Plain):
+                        texts.append(segment.text or "")
+
+        if not any(text.strip() for text in texts):
+            fetched = await self._fetch_forward_card_text(event)
+            if fetched:
+                texts.append(fetched)
+
+        return "\n".join(text for text in texts if text and text.strip()).strip()
+
+    async def _quoted_reply_text(self, event: AstrMessageEvent) -> str:
+        """取「被引用的那条消息」里的文字，交给框架的引用解析器，只解析一层。"""
+        try:
+            from astrbot.core.utils.quoted_message import extract_quoted_message_text
+            from astrbot.core.utils.quoted_message.chain_parser import ReplyChainParser
+            from astrbot.core.utils.quoted_message.settings import SETTINGS
+
+            reply = ReplyChainParser(SETTINGS).find_first_reply_component(event)
+            if reply is None:
+                return ""
+            # 只解析一层：转发层数与拉取次数都锁到 1
+            settings = SETTINGS.with_overrides(
+                {"max_forward_node_depth": 1, "max_forward_fetch": 1}
+            )
+            text = await extract_quoted_message_text(event, reply, settings)
+            # 框架会把非文字段渲染成占位符（[Image]/[Video]/[File:x]/[Forward Message]），
+            # 这些不该进生图提示词，清掉后再判断有没有可用文字。
+            cleaned = re.sub(
+                r"\[(?:Image|Video|Forward Message|File:[^\]]*)\]", " ", text or ""
+            )
+            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned).strip()
+            if not cleaned:
+                # 有引用但没解析出可用文字：多半是纯图片/文件引用，也可能解析失败
+                logger.info(f"{LOG} 引用消息未解析出可用文字，将忽略引用内容")
+            return cleaned
+        except Exception as exc:
+            logger.warning(f"{LOG} 引用内容文字解析失败: {safe_log_error_body(exc)}")
+            return ""
+
+    async def _fetch_forward_card_text(self, event: AstrMessageEvent) -> str:
+        """Fetch one level of text from a ``Forward`` component that carries only an id."""
+        forward_cls = getattr(Comp, "Forward", None)
+        if forward_cls is None:
+            return ""
+
+        forward_id = ""
+        for component in event.message_obj.message:
+            if not isinstance(component, forward_cls):
+                continue
+            forward_id = str(getattr(component, "id", "") or "").strip()
+            if forward_id:
+                break
+        if not forward_id:
+            return ""
+
+        try:
+            from astrbot.core.utils.quoted_message.chain_parser import (
+                OneBotPayloadParser,
+            )
+            from astrbot.core.utils.quoted_message.onebot_client import OneBotClient
+            from astrbot.core.utils.quoted_message.settings import SETTINGS
+
+            client = OneBotClient(event, settings=SETTINGS)
+            payload = await client.get_forward_msg(forward_id)
+            if not payload:
+                # 到这里说明确实去拉了但没拿到，属于可观测的失败
+                logger.warning(
+                    f"{LOG} 合并转发内容拉取失败，将忽略卡片文字（get_forward_msg 无返回）"
+                )
+                return ""
+            # parse_get_forward_payload 只解一层，递归由调用方决定
+            parsed = OneBotPayloadParser(settings=SETTINGS).parse_get_forward_payload(
+                payload
+            )
+            return (parsed.get("text") or "").strip()
+        except Exception as exc:
+            logger.warning(f"{LOG} 合并转发文字解析失败: {safe_log_error_body(exc)}")
+            return ""
+
     def collect_direct_event_image_urls(self, event: AstrMessageEvent) -> list[str]:
         """Return image URLs attached directly to the current message."""
         references: list[str] = []

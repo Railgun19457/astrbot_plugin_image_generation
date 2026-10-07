@@ -613,6 +613,12 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             matched_personas,
         )
 
+        # 合并转发卡片里的文字并入提示词；只解析一层，卡片里再嵌转发不深入。
+        # 放在用户自己写的要求前面，作为素材。
+        forward_text = await self.image_processor.collect_forward_card_text(event)
+        if forward_text:
+            prompt = f"{forward_text}\n{prompt}".strip() if prompt else forward_text
+
         if not prompt:
             yield event.plain_result("❌ 请提供图片生成的提示词或预设名称！")
             return
