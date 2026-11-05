@@ -20,17 +20,35 @@ api = image_plugin.public_api
 
 - 公共 API 只返回任务信息或本地图片路径
 - `unified_msg_origin` 可选：
-  - 传入时执行黑名单、白名单、频率限制、每日额度检查，并在成功生成后按实际生成数量扣减额度
-  - 不传入时不计用户额度，也不会做用户维度的限制判断
+  - 传入时执行会话黑白名单、冷却与群聊/兼容会话额度；同时传入真实 `sender_id` 才能执行个人额度。按实际保存数量结算
+  - 不传入时沿用系统调用，不计会话或个人额度；不能携带 `sender_id`
 - 提示词审核和图片审核仍按插件配置执行
 - `task_id` 由 API 自动生成
 - 提交任务会在收集参考图和预约额度前预检查队列容量；队列满时直接返回 `queue_full`
 - 任务历史元数据默认会持久化，插件重载后最近的已结束任务仍可查询；重启前未完成的任务会恢复为 `cancelled`，不会继续执行
-- 历史持久化内容包括会话标识、提示词摘要、结果路径和错误摘要，可通过“任务持久化”配置关闭或调整保留条数/天数
+- 历史持久化内容包括会话标识、提示词摘要、结果路径和错误摘要，可通过“任务持久化”配置关闭或调整保留条数/天数；未结算额度任务仍保存不含提示词和图片路径的最小恢复记录
 - 生成的图片默认持久化到插件数据目录的 `generated_images/`，可通过“持久化生成的图片”和“持久化图片数量上限”控制
 - 关闭图片持久化或超出数量上限后，历史任务的 `result_paths` 可能指向已被清理的临时文件，调用方需要自行检查路径是否仍存在
-- `requested_count` 表示模型接口子请求数量，不保证等于最终图片数量；`result_count` 表示实际保存的结果图片数量
+- `requested_count` 表示请求图片数量和最大保存数量；`result_count` 表示实际保存的结果图片数量，可能因部分失败少于请求数
 - 返回对象的 `code` 来自 `core.public_api.PublicAPIResultCode`，调用方可直接与字符串值比较，也可导入该枚举避免手写返回码
+
+## 调用身份与额度
+
+`submit_generation_task` 与 `generate_image_files` 使用同一身份与额度规则，新增参数均为可选关键字，不要求旧版第三方插件立即修改：
+
+| 调用形态 | 任务记录中的身份 | 额度处理 |
+| :--- | :--- | :--- |
+| UMO + 真实 sender_id | `user` | 群聊额度（或私聊兼容额度）与个人额度按各自开关共同检查、预留和结算。 |
+| 仅 UMO，默认 `auto` | `legacy` | 保留旧会话限额及黑白名单/冷却；跳过无法识别的个人额度，不把 UMO 当个人 ID。 |
+| 无 UMO、无 sender_id | `system` | 沿用旧系统调用，不计会话/个人额度；仍执行审核与任务队列限制。 |
+| 显式 `system` + UMO，无 sender_id | `system` | 计入群聊/兼容会话额度及会话限制；不计个人额度。 |
+| 显式 `user` 缺 sender_id，或 sender_id 缺 UMO | 拒绝 | 返回 `rejected`，`error="invalid_identity"`，不会创建任务或预留。 |
+
+显式 `system` 不能携带 sender_id；`legacy` 携带 sender_id 会按 `user` 处理，不能借此绕过个人额度。非法 `caller_type` 会被拒绝。群私聊通过 AstrBot `MessageSession.from_str()` 和标准 `MessageType` 识别；旧的不透明 UMO 保留会话限额，不误称为群聊。
+
+只有个人额度启用而调用方未传 sender_id 时，兼容旧调用仍然可用，个人额度不会生效。公共 API 是受信任的插件间 Python 接口，不能依靠可省略身份参数阻止恶意插件；面向用户的调用方应传真实事件身份，后台系统任务则明确标注 `caller_type="system"`。`is_admin` 也应来自 `event.is_admin()`，不可由用户文本或 LLM 决定。
+
+任务记录持久化调用身份、发送者、两层额度键、提交日期、预留数量和豁免状态。结果仍通过原 UMO 归属，取消/查询的会话权限不改为 sender_id。等待接口超时只代表调用方停止等待，任务仍执行并保留额度，最终按实际结果结算；需取消时调用取消接口。
 
 ## 接口总览
 
@@ -62,6 +80,8 @@ async def submit_generation_task(
     presets: str | list[str] | None = None,
     personas: str | list[str] | None = None,
     is_admin: bool = False,
+    sender_id: str | None = None,
+    caller_type: str = "auto",
 ) -> ImageGenerationSubmitResult
 ```
 
@@ -79,7 +99,9 @@ async def submit_generation_task(
 | `reference_image_data` | 已读取的参考图二进制列表，推荐传入 `ImageData`；仍兼容旧格式 `(image_bytes, mime_type)`。 |
 | `presets` | 一个或多个预设名。字符串可用空格分隔多个名称。 |
 | `personas` | 一个或多个人设名。字符串可用空格分隔多个名称；人设参考图会在模型支持图生图时自动加入。 |
-| `is_admin` | 仅在传入 `unified_msg_origin` 时生效，用于管理员额度豁免判断。 |
+| `is_admin` | 仅在传入 `unified_msg_origin` 时生效，用于 AstrBot 管理员额度豁免判断，豁免后仍记录用量。 |
+| `sender_id` | 可选真实发送者 ID；请直接传 `event.get_sender_id()`。与 UMO 一起用于个人额度，不接受昵称、提示词推断或群 UMO 冒充个人。 |
+| `caller_type` | 默认 `"auto"`：根据是否提供 UMO / sender_id 区分用户、旧版会话和系统调用。可显式传 `"user"`、`"legacy"`、`"system"`，见下文。 |
 
 ### 行为
 
@@ -249,6 +271,8 @@ async def generate_image_files(
     presets: str | list[str] | None = None,
     personas: str | list[str] | None = None,
     is_admin: bool = False,
+    sender_id: str | None = None,
+    caller_type: str = "auto",
     timeout_seconds: float | None = None,
     poll_interval_seconds: float = 0.5,
 ) -> ImageGenerationResult
@@ -306,13 +330,15 @@ else:
     error_message = result.message
 ```
 
-### 示例：按用户额度计费
+### 示例：同时执行群聊与个人额度
 
 ```python
 result = await api.generate_image_files(
     prompt="一张像素风头像",
     unified_msg_origin=event.unified_msg_origin,
     is_admin=event.is_admin(),
+    sender_id=event.get_sender_id(),
+    caller_type="user",
     source="astrbot_plugin_example",
     timeout_seconds=180,
 )
@@ -386,7 +412,7 @@ result = await api.generate_image_files(
 | `status` | `str` | 英文状态：`queued`、`running`、`succeeded`、`failed`、`cancelling`、`cancelled`。 |
 | `active` | `bool` | 任务是否仍在进行。 |
 | `source` | `str` | 任务来源。 |
-| `requested_count` | `int` | 模型接口子请求数量，不保证等于最终图片数量。 |
+| `requested_count` | `int` | 请求图片数量与最大保存数量；部分失败时结果数会减少。 |
 | `result_count` | `int` | 实际保存的结果图片数量。 |
 | `reference_image_count` | `int` | 实际参考图数量。 |
 | `aspect_ratio` | `str` | 任务记录中的宽高比参数。 |

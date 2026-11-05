@@ -1520,7 +1520,7 @@
   },
   "user_limits": {
     "description": "使用限制",
-    "hint": "配置会话黑名单、用户频率限制、每日额度和参考图大小限制。",
+    "hint": "配置会话黑名单、会话频率限制、群聊和个人每日额度及参考图大小限制。",
     "type": "object",
     "items": {
       "umo_blacklist": {
@@ -1549,7 +1549,7 @@
       },
       "rate_limit_seconds": {
         "description": "速率限制（秒）",
-        "hint": "同一用户两次请求之间的最小间隔；填 0 表示不限制。",
+        "hint": "同一会话 UMO 两次请求之间的最小间隔（群内共享）；填 0 表示不限制。",
         "type": "int",
         "slider": {
           "min": 0,
@@ -1571,13 +1571,55 @@
       },
       "enable_daily_limit": {
         "description": "启用每日额度",
-        "hint": "开启后限制每个用户每日可生成的图片数量。",
+        "hint": "旧版会话额度配置，首次升级自动迁移，保留用于回滚。",
         "type": "bool",
-        "default": false
+        "default": false,
+        "invisible": true
       },
       "daily_limit_count": {
         "description": "每日额度",
-        "hint": "每个用户每日可生成的最大图片数量。",
+        "hint": "旧版会话额度配置，首次升级自动迁移，保留用于回滚。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        "default": 10,
+        "invisible": true
+      },
+      "daily_limits_migrated": {
+        "description": "每日额度已迁移",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+      },
+      "enable_group_daily_limit": {
+        "description": "启用群聊每日额度",
+        "hint": "同群共享；私聊和未知会话保留旧会话额度，避免升级后失去限制。",
+        "type": "bool",
+        "default": false
+      },
+      "group_daily_limit_count": {
+        "description": "群聊每日额度",
+        "hint": "每天最多生成的图片数量；群聊额度与另一层同时启用时均须满足。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        "default": 10
+      },
+      "enable_user_daily_limit": {
+        "description": "启用个人每日额度",
+        "hint": "按 UMO 与真实发送者 ID 独立统计，同一用户在不同群额度独立。",
+        "type": "bool",
+        "default": false
+      },
+      "user_daily_limit_count": {
+        "description": "个人每日额度",
+        "hint": "每天最多生成的图片数量；个人额度与另一层同时启用时均须满足。",
         "type": "int",
         "slider": {
           "min": 1,

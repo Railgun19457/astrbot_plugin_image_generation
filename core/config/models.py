@@ -39,11 +39,22 @@ class UsageSettings:
     rate_limit_seconds: int = DEFAULT_RATE_LIMIT_SECONDS
     enable_daily_limit: bool = False
     daily_limit_count: int = DEFAULT_DAILY_LIMIT_COUNT
+    enable_group_daily_limit: bool | None = None
+    group_daily_limit_count: int | None = None
+    enable_user_daily_limit: bool = False
+    user_daily_limit_count: int = DEFAULT_DAILY_LIMIT_COUNT
     max_image_size_mb: int = DEFAULT_MAX_IMAGE_SIZE_MB
     umo_blacklist: list[str] = field(default_factory=list)
     admin_bypass_limits: bool = True
     umo_whitelist: list[str] = field(default_factory=list)
     blacklist_block_message: str = "❌ 当前会话已被加入黑名单，无法使用生图功能"
+
+    def __post_init__(self) -> None:
+        # Keep direct users of the old UsageSettings constructor compatible.
+        if self.enable_group_daily_limit is None:
+            self.enable_group_daily_limit = self.enable_daily_limit
+        if self.group_daily_limit_count is None:
+            self.group_daily_limit_count = self.daily_limit_count
 
 
 @dataclass

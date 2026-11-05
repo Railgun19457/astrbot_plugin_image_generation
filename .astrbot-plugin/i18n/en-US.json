@@ -912,7 +912,7 @@
     },
     "user_limits": {
       "description": "Usage limits",
-      "hint": "Configure session blacklist, user rate limits, daily quota, and reference image size limits.",
+      "hint": "Configure session blacklists, conversation rate limits, group and user daily quotas, and reference image size limits.",
       "umo_blacklist": {
         "description": "Session UMO blacklist",
         "hint": "Enter unified_msg_origin (UMO) values. Matching sessions cannot use image generation."
@@ -931,7 +931,7 @@
       },
       "rate_limit_seconds": {
         "description": "Rate limit (seconds)",
-        "hint": "Minimum interval between two requests from the same user. Set to 0 to disable rate limiting."
+        "hint": "Minimum interval between requests in the same UMO conversation (shared by group members). Set 0 to disable."
       },
       "max_image_size_mb": {
         "description": "Maximum reference image size (MB)",
@@ -939,11 +939,27 @@
       },
       "enable_daily_limit": {
         "description": "Enable daily quota",
-        "hint": "When enabled, limit how many images each user can generate per day."
+        "hint": "Legacy conversation quota; migrated once to the group daily quota."
       },
       "daily_limit_count": {
         "description": "Daily quota",
-        "hint": "Maximum number of images each user can generate per day."
+        "hint": "Legacy quota count retained for configuration compatibility."
+      },
+      "enable_group_daily_limit": {
+        "description": "Enable group daily quota",
+        "hint": "Shared by the group; retains legacy conversation limits in private chats."
+      },
+      "group_daily_limit_count": {
+        "description": "Group daily quota",
+        "hint": "Maximum images per day for this group quota. Both enabled quotas must pass."
+      },
+      "enable_user_daily_limit": {
+        "description": "Enable user daily quota",
+        "hint": "Per real sender within each conversation; independent across groups."
+      },
+      "user_daily_limit_count": {
+        "description": "User daily quota",
+        "hint": "Maximum images per day for this user quota. Both enabled quotas must pass."
       }
     },
     "safety_audit": {

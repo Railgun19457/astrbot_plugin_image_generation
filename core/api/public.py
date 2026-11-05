@@ -42,6 +42,7 @@ LOG = log_prefix("PublicAPI")
 DEFAULT_SOURCE = "公共接口"
 DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 0.5
 TASK_CREATION_ERROR_CODES = {
+    "rate_limited": PublicAPIResultCode.RATE_LIMITED,
     PublicAPIResultCode.QUEUE_FULL.value: PublicAPIResultCode.QUEUE_FULL,
     PublicAPIResultCode.TASK_MANAGER_CLOSED.value: PublicAPIResultCode.TASK_MANAGER_CLOSED,
     PublicAPIResultCode.TASK_ID_CONFLICT.value: PublicAPIResultCode.TASK_ID_CONFLICT,
@@ -68,6 +69,8 @@ class ImageGenerationPublicAPI:
         presets: str | list[str] | None = None,
         personas: str | list[str] | None = None,
         is_admin: bool = False,
+        sender_id: str | None = None,
+        caller_type: str = "auto",
     ) -> ImageGenerationSubmitResult:
         """Submit a background image generation task and return its task id."""
         plugin = self._plugin
@@ -134,6 +137,7 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
+                sender_id=str(sender_id or "").strip(),
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -169,28 +173,6 @@ class ImageGenerationPublicAPI:
                 error=code,
             )
 
-        if use_usage_scope:
-            check_result = plugin.usage_manager.check_rate_limit(
-                scope,
-                is_admin=safe_is_admin,
-                requested_count=requested_count,
-            )
-            if isinstance(check_result, str):
-                logger.info(
-                    f"{LOG} "
-                    + format_log_event(
-                        "公共接口使用限制",
-                        调用方=request_source,
-                        用户=mask_sensitive(scope),
-                        原因=safe_log_text(check_result),
-                    )
-                )
-                return self._submit_error(
-                    PublicAPIResultCode.RATE_LIMITED,
-                    check_result,
-                )
-
-        task_created = False
         try:
             references = await self._collect_reference_images(
                 reference_image_sources=reference_image_sources,
@@ -215,13 +197,14 @@ class ImageGenerationPublicAPI:
                 resolution=str(final_resolution),
                 image_count=requested_count,
                 is_usage_limit_admin=safe_is_admin,
+                sender_id=sender_id,
+                caller_type=caller_type,
                 preset=preset_summary,
                 preset_label=preset_label,
                 presets=matched_presets,
                 personas=matched_personas,
                 auto_send=False,
             )
-            task_created = True
             logger.debug(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(
@@ -240,26 +223,8 @@ class ImageGenerationPublicAPI:
                 error=exc.code,
             )
         except asyncio.CancelledError:
-            if not task_created:
-                record = plugin.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    plugin.usage_manager.release_reserved_usage(
-                        scope,
-                        is_admin=safe_is_admin,
-                        count=requested_count,
-                        quota_date=record.quota_date,
-                    )
             raise
         except Exception as exc:
-            if not task_created:
-                record = plugin.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    plugin.usage_manager.release_reserved_usage(
-                        scope,
-                        is_admin=safe_is_admin,
-                        count=requested_count,
-                        quota_date=record.quota_date,
-                    )
             logger.error(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(
@@ -415,6 +380,8 @@ class ImageGenerationPublicAPI:
         presets: str | list[str] | None = None,
         personas: str | list[str] | None = None,
         is_admin: bool = False,
+        sender_id: str | None = None,
+        caller_type: str = "auto",
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     ) -> ImageGenerationResult:
@@ -431,6 +398,8 @@ class ImageGenerationPublicAPI:
             presets=presets,
             personas=personas,
             is_admin=is_admin,
+            sender_id=sender_id,
+            caller_type=caller_type,
         )
         if not submit_result.ok or not submit_result.task_id:
             return ImageGenerationResult(

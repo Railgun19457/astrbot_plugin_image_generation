@@ -201,36 +201,19 @@ class GenerationExecutor:
             or record.quota_settled
         ):
             return
-        self.usage_manager.release_reserved_usage(
-            record.usage_scope,
-            is_admin=record.is_usage_limit_admin,
-            count=record.reserved_count,
-            quota_date=record.quota_date,
+        self.settle_generation_task_quota_once(
+            task_id, actual_count=record.result_count or len(record.result_paths)
         )
-        self.task_manager.mark_generation_task_quota_released(task_id)
 
     def settle_generation_task_quota_once(
-        self,
-        task_id: str,
-        *,
-        actual_count: int,
+        self, task_id: str, *, actual_count: int
     ) -> None:
-        """Settle reserved quota for one task at most once.
-
-        Args:
-            task_id: Generation task ID whose reservation should be settled.
-            actual_count: Number of successfully generated images to record.
-        """
+        """Persist usage and its receipt before marking task history settled."""
         record = self.task_manager.get_generation_task(task_id)
-        if not record or not record.usage_scope or record.quota_settled:
+        if not record or record.quota_settled or record.quota_released:
             return
-        self.usage_manager.settle_usage(
-            record.usage_scope,
-            is_admin=record.is_usage_limit_admin,
-            reserved_count=record.reserved_count,
-            actual_count=actual_count,
-            quota_date=record.quota_date,
-        )
+        self.usage_manager.settle_task(record, actual_count=actual_count)
+        record.quota_usage_summary = self.usage_manager.format_usage(record)
         self.task_manager.mark_generation_task_quota_settled(task_id)
 
     async def _do_generate_and_send(
@@ -342,6 +325,7 @@ class GenerationExecutor:
             duration=duration,
             result_count=len(generated_file_paths),
             task_id=task_id,
+            quota_record=self.task_manager.get_generation_task(task_id),
         )
 
         sent_batches, send_errors = await self._send_generated_images(
@@ -537,12 +521,25 @@ class GenerationExecutor:
                     else:
                         saved_count = 0
                         for img_bytes in result.images:
+                            # Adapters can return more than one image per request.
+                            # Never save/charge more images than were admitted.
+                            if len(generated_file_paths) >= image_count:
+                                self.task_manager.update_generation_task_item_result(
+                                    task_id,
+                                    index=current_index,
+                                    status="succeeded",
+                                    result_count=saved_count,
+                                )
+                                break
                             file_path = self.image_processor.save_generated_image(
                                 task_id, img_bytes
                             )
                             if file_path:
                                 generated_file_paths.append(file_path)
                                 saved_count += 1
+                                self.task_manager.record_generation_task_output(
+                                    task_id, file_path
+                                )
                             else:
                                 error_message = (
                                     f"第 {current_index} 张生成失败: 未能保存图片"

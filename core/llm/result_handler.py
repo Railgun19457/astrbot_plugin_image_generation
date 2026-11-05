@@ -19,7 +19,7 @@ from astrbot.core.db.po import Conversation
 from astrbot.core.platform.message_session import MessageSession
 from astrbot.core.provider.entities import ProviderRequest
 
-from ..config.manager import ConfigManager
+from ..config.manager import RESULT_INFO_USAGE, ConfigManager
 from ..formatting.result import format_generation_failure_message
 from ..generation.image_processor import ImageProcessor
 from ..shared.logging import log_prefix, safe_log_text
@@ -200,6 +200,14 @@ class LLMResultHandler:
             "images_attached_to_model": supports_image_input
             and bool(record.result_paths),
         }
+        if (
+            self.config_manager.should_show_result_info(RESULT_INFO_USAGE)
+            and record.quota_usage_summary
+        ):
+            payload["usage_summary"] = record.quota_usage_summary
+            payload["usage_instruction"] = (
+                "用量和豁免状态以 usage_summary 为准，不要推断发送者身份或额度。"
+            )
         if record.duration_seconds is not None:
             payload["duration_seconds"] = round(record.duration_seconds, 2)
         return payload
@@ -356,11 +364,8 @@ class LLMResultHandler:
             context=self.context,
             session=session,
             message=f"图像生成任务 {record.task_id} 已完成",
-            sender_id=(
-                str(source_event.get_self_id())
-                if hasattr(source_event, "get_self_id")
-                else "astrbot"
-            ),
+            # Preserve the original human identity for any further tool calls.
+            sender_id=record.sender_id or source_event.get_sender_id(),
             sender_name="ImageGeneration",
             message_type=session.message_type,
         )

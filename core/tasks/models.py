@@ -123,6 +123,12 @@ class GenerationTaskRecord:
     max_retry_attempts: int = 0
     items: dict[int, GenerationTaskItem] = field(default_factory=dict)
     usage_scope: str = ""
+    quota_version: int = 1
+    sender_id: str = ""
+    quota_caller_type: str = "legacy"
+    quota_scopes: dict[str, str] = field(default_factory=dict)
+    quota_exempt: bool = False
+    quota_usage_summary: str = ""
     reserved_count: int = 0
     quota_date: str = ""
     is_usage_limit_admin: bool = False
