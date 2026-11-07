@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 import time
 from typing import Any, ClassVar
 
@@ -12,11 +13,11 @@ from astrbot.api import logger
 from ..core.adapters.base import BaseImageAdapter
 from ..core.shared.constants import UNSPECIFIED_OPTION
 from ..core.shared.logging import safe_log_error_body, safe_log_url
-from ..core.shared.types import GenerationRequest, ImageCapability
+from ..core.shared.types import GenerationRequest, GenerationResult, ImageCapability
 
 
 class OpenAIAdapter(BaseImageAdapter):
-    """OpenAI image generation adapter for GPT Image 2 and 2.5 models."""
+    """OpenAI image generation adapter for GPT Image 2-series models."""
 
     # GPT Image 2 / 2.5 size presets. Every edge is a multiple of 16, the
     # longest edge is at most 3840, and total pixels stay within the
@@ -88,11 +89,20 @@ class OpenAIAdapter(BaseImageAdapter):
         }.get((mime_type or "").lower(), ".png")
         return f"reference_{index}{extension}"
 
+    def _pre_generate(self, request: GenerationRequest) -> GenerationResult | None:
+        """Reject invalid GIF settings before sending or retrying a request."""
+        try:
+            self._build_payload(request)
+        except ValueError as exc:
+            return GenerationResult(error=str(exc))
+        return None
+
     async def _generate_once(
         self, request: GenerationRequest
     ) -> tuple[list[bytes] | None, str | None]:
         """Execute one image generation request."""
         start_time = time.time()
+        payload = self._build_payload(request)
 
         use_edit = bool(request.images)
         session = self._get_session()
@@ -102,11 +112,8 @@ class OpenAIAdapter(BaseImageAdapter):
         if use_edit:
             url = f"{base}/v1/images/edits"
             form = aiohttp.FormData()
-            form.add_field("model", self.model or "gpt-image-2")
-            form.add_field("prompt", request.prompt)
-            form.add_field("n", "1")
-            if size := self._map_size(request.aspect_ratio, request.resolution):
-                form.add_field("size", size)
+            for key, value in payload.items():
+                form.add_field(key, str(value))
             for index, img in enumerate(request.images, start=1):
                 form.add_field(
                     "image[]",
@@ -118,7 +125,6 @@ class OpenAIAdapter(BaseImageAdapter):
         else:
             url = f"{base}/v1/images/generations"
             headers["Content-Type"] = "application/json"
-            payload = self._build_payload(request)
             enable_streaming = self.config.extra.get("enable_streaming", True)
             if isinstance(enable_streaming, str):
                 enable_streaming = enable_streaming.strip().lower() not in {
@@ -128,7 +134,7 @@ class OpenAIAdapter(BaseImageAdapter):
                     "off",
                     "",
                 }
-            if enable_streaming:
+            if enable_streaming and payload["output_format"] != "gif":
                 payload["stream"] = True
             kwargs = {"json": payload}
             self._log_request_overview(request, url, payload=payload)
@@ -137,9 +143,9 @@ class OpenAIAdapter(BaseImageAdapter):
             self._log_request_overview(
                 request,
                 url,
-                form_fields=["model", "prompt", "n", "size", "image[]"],
+                form_fields=[*payload, "image[]"],
             )
-            self._log_debug_json("请求表单尺寸", {"size": size}, request.task_id)
+            self._log_debug_json("请求表单参数", payload, request.task_id)
 
         try:
             async with session.post(
@@ -257,12 +263,37 @@ class OpenAIAdapter(BaseImageAdapter):
             "n": 1,
         }
 
-        if size := self._map_size(request.aspect_ratio, request.resolution):
-            payload["size"] = size
-        output_format = str(self.config.extra.get("output_format") or "png").lower()
+        output_format = str(self.config.extra.get("output_format") or "png").strip().lower()
         payload["output_format"] = (
-            output_format if output_format in {"png", "jpeg", "webp"} else "png"
+            output_format if output_format in {"png", "jpeg", "webp", "gif"} else "png"
         )
+        if output_format == "gif":
+            for key, default, minimum, maximum in (
+                ("frame_count", 9, 2, 16),
+                ("frame_duration_ms", 200, 20, 2000),
+            ):
+                try:
+                    value = int(str(self.config.extra.get(key, default)))
+                    if not minimum <= value <= maximum:
+                        raise ValueError
+                except ValueError:
+                    raise ValueError(
+                        f"GIF {key} 必须是 {minimum}～{maximum} 的整数"
+                    ) from None
+                payload[key] = value
+
+            size = str(self.config.extra.get("gif_size") or "auto").strip().lower()
+            if size != "auto":
+                dimensions = re.fullmatch(r"([0-9]+)x([0-9]+)", size)
+                if not dimensions or any(
+                    int(edge) < 16 or int(edge) % 16 for edge in dimensions.groups()
+                ):
+                    raise ValueError(
+                        "GIF gif_size 必须为 auto 或宽x高，宽高均须为正整数且为 16 的倍数"
+                    )
+            payload["size"] = size
+        elif size := self._map_size(request.aspect_ratio, request.resolution):
+            payload["size"] = size
 
         return payload
 

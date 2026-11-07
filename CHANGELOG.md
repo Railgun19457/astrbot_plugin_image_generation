@@ -1,4 +1,9 @@
 ### 更新日志
+- **v1.8.5-2026-11-07** ([#75](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/75))
+  - OpenAI Images API 新增 GIF 动图输出：文生图与图生图共用输出参数，支持 `frame_count`（2～16）、`frame_duration_ms`（20～2000 毫秒）和独立 `gif_size`（默认 auto）；GIF 自动禁用 SSE，非法帧参数或尺寸在发请求前拒绝。
+  - 修复 OpenAI 图生图未发送 `output_format` 的问题；新增 GPT Image 2.6 Sunburst / Flare 模型选项和中英文配置提示，保留原有默认模型与 PNG 输出。
+  - GIF 持久化与投递沿用已有无转码流程，保留原始动图字节。
+
 - **v1.8.4-2026-10-25**
   - LLM 生图工具的结果投递改为由 AI 自行判断：唤醒提示词只说明「图片已生成、不要重复生图、是否发送由你决定」，AI 可以选择立即发送、稍后发送或静默留作素材（例如生成 PPT 素材时不再打扰用户），插件不再强制发送或补发图片。
   - 会话历史中记录的结果图片统一为 AstrBot 临时目录下的投递路径，可直接交给 `send_message_to_user`；已发送与未发送的图片按文件名区分，只发文字或只发部分图片时不会误记为全部已送达。
