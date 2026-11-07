@@ -26,7 +26,7 @@
 常见专属配置：
 
 - `openai_chat`：可配置提示词前缀、`modalities` 和额外请求体 JSON。
-- `openai`：使用 GPT Image 2 / 2.5 模型；支持 1K/1.5K/2K/4K 分辨率与宽高比组合。文生图默认可使用 SSE，不支持流式的兼容站点可关闭该开关。可选择 png/jpeg/webp 输出格式，默认 png。
+- `openai`：使用 GPT Image 2 系列模型；静态图片支持 1K/1.5K/2K/4K 分辨率与宽高比组合。文生图默认可使用 SSE，不支持流式的兼容站点可关闭该开关。文生图和图生图均可选择 png/jpeg/webp/gif 输出格式，默认 png；GIF 设置与限制见下文。
 - `volcengine_ark`：仅适配 Seedream 5.0 Pro / Flash，支持标准 API 与 Agent Plan 切换；Agent Plan 需专属 API Key 和套餐模型（默认列表含 `doubao-seedream-5.0-pro`）。分辨率支持 1K/1.5K/2K，参考图数量不额外限制；Flash 的 `fast` 按 standard 发送。
 - `gitee_ai`：可通过图像接口模式自动或手动选择 `generations` / `edits`。
 - `siliconflow_adapter`：可配置反向提示词、推理步数和提示词遵循强度。
@@ -35,6 +35,25 @@
 - `modelscope`：调用 API-Inference 异步图像接口，使用 ModelScope Access Token 提交、轮询并下载结果；可配置轮询间隔、总等待时间、反向提示词和尺寸映射。默认模板仅启用文生图；需要模型明确支持后才启用图生图。收到 `task_id` 后不会通过外层重试重新提交任务；详见 [ModelScope 接口配置](modelscope.md)。
 - `custom_http`：可配置请求方法、请求头、查询参数、请求体、图片结果路径、结果类型、错误路径和成功状态码；详见 [自定义 HTTP 接口配置](custom-http.md)。
 - `comfyui`：上传 ComfyUI API 格式工作流文件并轮询结果；支持提示词自动写入、参考图上传、宽高比/分辨率节点映射和尺寸映射。可用模型列表仅用于显示，实际模型由工作流加载节点决定；详见 [ComfyUI 工作流配置](comfyui.md)。
+
+### OpenAI GIF 动图
+
+在 OpenAI 供应商中将「GPT Image 输出格式」设为 `gif`，并选择支持 GIF 且账号已获预览权限的模型，例如 `gpt-image-2.6-sunburst` 或 `gpt-image-2.6-flare`。旧供应商的可用模型列表不会自动覆盖，需要手动补充模型并切换；仅修改输出格式不会自动切换模型。
+
+| 配置键 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `output_format` | `png` | 选择 `gif` 后生成完整动图；文生图 `/v1/images/generations` 和图生图 `/v1/images/edits` 均生效。 |
+| `frame_count` | `9` | 每张动图的帧数，整数 2～16；仅 GIF 输出时发送。 |
+| `frame_duration_ms` | `200` | 每帧时长，整数 20～2000 毫秒，接口按 10 毫秒取整；仅 GIF 输出时发送。默认动画约为 1.8 秒。 |
+| `gif_size` | `auto` | GIF 每帧尺寸，替代普通宽高比和分辨率设置。可用 `auto` 或 `512x512` 等宽x高，两边均须为正整数且为 16 的倍数。 |
+
+- 在提示词中描述主体、动作和循环方式；有静态参考图时走编辑接口。GIF 参考图仍沿用原有首帧转静态图片的流程，不代表支持逐帧编辑输入动图。
+- GIF 自动禁用 SSE，即使「使用 SSE 流式请求」开启也只接收最终完整结果；不发送部分图片、蒙版或自定义输出压缩参数。切回静态格式后恢复原有流式开关和尺寸设置，忽略 GIF 专属参数。
+- 帧数、帧尺寸和单次动画数量共同受模型像素预算限制；默认 `auto` 由接口选择尺寸。遇到尺寸/像素预算错误时减小帧数或尺寸，不自动降级为 PNG，也不擅自减少帧数。
+- 本地会拒绝越界或非整数的帧参数，以及格式不正确的帧尺寸，不为此重试请求。模型权限和具体像素上限由供应商判断；兼容站点需自行确认支持情况。
+- 返回的 Base64 或 URL 结果按原始字节保存为 `.gif`，持久化和投递不转成静态图；接收平台是否播放动画取决于其自身能力。
+
+依据：[OpenAI GIF 输出指南](https://developers.openai.com/api/docs/guides/image-generation#generate-animated-gif-output)、[Images 编辑接口参数](https://developers.openai.com/api/reference/resources/images/methods/edit)。
 
 ## 生成与结果配置
 

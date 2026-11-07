@@ -294,16 +294,29 @@
           },
           "enable_streaming": {
             "description": "Use SSE streaming",
-            "hint": "Enabled by default for text-to-image requests. Disable this for compatible endpoints that do not support SSE and expect a normal JSON response."
+            "hint": "Enabled by default for text-to-image requests. Disable this for endpoints that do not support SSE. GIF output always disables SSE."
           },
           "output_format": {
             "description": "GPT Image output format",
-            "hint": "PNG keeps lossless quality. JPEG produces a smaller response and is useful for relays that truncate large Base64 payloads.",
+            "hint": "Applies to both generation and edits. PNG is lossless; JPEG has smaller responses. Animated GIF requires GIF preview access and a supported model, such as GPT Image 2.6, and disables SSE.",
             "labels": [
               "png",
               "jpeg",
-              "webp"
+              "webp",
+              "gif"
             ]
+          },
+          "frame_count": {
+            "description": "GIF frame count",
+            "hint": "GIF only: 2–16 frames. Frame count and dimensions must fit the model's pixel budget."
+          },
+          "frame_duration_ms": {
+            "description": "GIF frame duration (ms)",
+            "hint": "GIF only: 20–2000 ms, rounded to 10 ms by the API. The defaults of 9 frames and 200 ms produce about 1.8 seconds."
+          },
+          "gif_size": {
+            "description": "GIF frame size",
+            "hint": "GIF only; replaces the normal aspect ratio and resolution settings. Default: auto. Alternatively use positive WIDTHxHEIGHT dimensions divisible by 16, such as 512x512. Reduce dimensions or frame count if the model's pixel budget is exceeded."
           }
         },
         "volcengine_ark": {

@@ -43,7 +43,7 @@
 | :--- | :--- | :---: | :---: | :---: | :--- |
 | `gemini` | Gemini 原生 `generateContent` | ✅ | ✅ | ✅ | Gemini 原生图像生成接口。 |
 | `openai_chat` | OpenAI 兼容 `chat/completions` | ✅ | ✅ | ❌ | 通用 Chat 生图，可配置提示词前缀、输出模态和额外请求体。 |
-| `openai` | Images `/v1/images/generations`、`/edits` | ✅ | ✅ | ✅ | GPT Image 2 / 2.5；支持参考图编辑与 1K/1.5K/2K/4K 分辨率。 |
+| `openai` | Images `/v1/images/generations`、`/edits` | ✅ | ✅ | ✅ | GPT Image 2 系列；支持参考图编辑、静态 1K/1.5K/2K/4K，以及 GIF 动图输出（需模型与账号支持，详见[设置](docs/configuration.md#openai-gif-动图)）。 |
 | `volcengine_ark` | 方舟 `/api/v3`、Agent Plan `/api/plan/v3` | ✅ | ✅ | ✅ | Seedream 5.0 Pro / Flash，支持两种接口模式。 |
 | `gitee_ai` | `/v1/images/generations`、`/edits` | ✅ | ✅ | ✅ | 可自动或手动选择生成/编辑接口。 |
 | `siliconflow_adapter` | SiliconFlow Images API | ✅ | ✅ | ✅ | 支持 Kolors、Qwen-Image 等，可配置反向提示词、步数。 |
