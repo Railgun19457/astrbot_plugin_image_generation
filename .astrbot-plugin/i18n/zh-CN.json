@@ -194,16 +194,29 @@
           },
           "enable_streaming": {
             "description": "使用 SSE 流式请求",
-            "hint": "文生图默认开启 SSE。部分兼容站点不支持流式时可关闭，改为普通 JSON 响应。"
+            "hint": "文生图默认开启 SSE。部分兼容站点不支持流式时可关闭，改为普通 JSON 响应。GIF 输出始终禁用 SSE。"
           },
           "output_format": {
             "description": "GPT Image 输出格式",
-            "hint": "PNG 保留无损质量；JPEG 响应更小，适合会截断大型 Base64 响应的中转接口。",
+            "hint": "文生图和图生图均生效。PNG 无损，JPEG 响应更小；GIF 为动图，需模型与账号支持 GIF 预览（如 GPT Image 2.6），并自动禁用 SSE。",
             "labels": [
               "png",
               "jpeg",
-              "webp"
+              "webp",
+              "gif"
             ]
+          },
+          "frame_count": {
+            "description": "GIF 帧数",
+            "hint": "仅 GIF 输出生效，2～16 帧。帧数与帧尺寸共同受模型像素预算限制。"
+          },
+          "frame_duration_ms": {
+            "description": "GIF 每帧时长（毫秒）",
+            "hint": "仅 GIF 输出生效，20～2000 毫秒；接口按 10 毫秒取整。默认 9 帧 × 200 毫秒约为 1.8 秒。"
+          },
+          "gif_size": {
+            "description": "GIF 帧尺寸",
+            "hint": "仅 GIF 输出生效，替代普通宽高比和分辨率设置。默认 auto，由接口选择尺寸；也可填 512x512 等正整数宽x高，两边均须为 16 的倍数。超出模型像素预算时请减小尺寸或帧数。"
           }
         },
         "volcengine_ark": {

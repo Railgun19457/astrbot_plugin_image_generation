@@ -38,6 +38,9 @@ ADAPTER_EXTRA_DEFAULTS: dict[AdapterType, dict[str, Any]] = {
     AdapterType.OPENAI: {
         "enable_streaming": True,
         "output_format": "png",
+        "frame_count": 9,
+        "frame_duration_ms": 200,
+        "gif_size": "auto",
     },
     AdapterType.AGNES_AI: {"response_format": "base64"},
     AdapterType.CODEX_RESPONSES: {"endpoint": "/codex/responses"},
