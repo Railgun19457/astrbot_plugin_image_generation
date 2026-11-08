@@ -365,7 +365,7 @@ class UsageManager:
                     record.usage_scope, is_admin=record.is_usage_limit_admin
                 )
             )
-            parts.append(f"{label} {used}/{'∞（豁免）' if exempt else limit}")
+            parts.append(f"{label} {used}/{'∞' if exempt else limit}")
         return "📅 今日生图：" + "，".join(parts) if parts else ""
 
     def record_request_timestamp(
