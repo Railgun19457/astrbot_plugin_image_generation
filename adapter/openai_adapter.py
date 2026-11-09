@@ -5,15 +5,40 @@ import base64
 import json
 import re
 import time
+import unicodedata
 from typing import Any, ClassVar
 
 import aiohttp
 from astrbot.api import logger
 
 from ..core.adapters.base import BaseImageAdapter
+from ..core.generation.image_utils import detect_mime_type
 from ..core.shared.constants import UNSPECIFIED_OPTION
 from ..core.shared.logging import safe_log_error_body, safe_log_url
 from ..core.shared.types import GenerationRequest, GenerationResult, ImageCapability
+
+# Prompt markers that mean "the user wants motion", matched case-insensitively
+# against the raw prompt only when `auto_gif` is on.
+GIF_PROMPT_KEYWORDS = ("gif", "动画", "动图")
+
+# ASCII keywords are bounded by ASCII alphanumerics only, so "gifted" is not read
+# as "gif" while "要gif图" still matches (CJK counts as a word character for \b);
+# CJK keywords are matched as plain substrings.
+_GIF_PROMPT_PATTERNS = tuple(
+    re.compile(
+        rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+        if keyword.isascii()
+        else re.escape(keyword)
+    )
+    for keyword in GIF_PROMPT_KEYWORDS
+)
+
+
+def _as_bool(value: Any) -> bool:
+    """Read a config flag that may arrive as a bool or a string."""
+    if isinstance(value, str):
+        return value.strip().lower() not in {"false", "0", "no", "off", ""}
+    return bool(value)
 
 
 class OpenAIAdapter(BaseImageAdapter):
@@ -103,6 +128,12 @@ class OpenAIAdapter(BaseImageAdapter):
         """Execute one image generation request."""
         start_time = time.time()
         payload = self._build_payload(request)
+        configured_format = self._configured_output_format()
+        if payload["output_format"] != configured_format:
+            logger.info(
+                f"{self._get_log_prefix(request.task_id)} 提示词命中 GIF 关键词，"
+                f"输出格式 {configured_format} → gif"
+            )
 
         use_edit = bool(request.images)
         session = self._get_session()
@@ -169,7 +200,12 @@ class OpenAIAdapter(BaseImageAdapter):
                     data = await self._read_stream_response(resp, request.task_id)
                 else:
                     data = await self._read_response_json(resp, request.task_id)
-                return await self._extract_images(data, request.task_id)
+                gif_only = payload["output_format"] == "gif" and not _as_bool(
+                    self.config.extra.get("send_gif_storyboard", True)
+                )
+                return await self._extract_images(
+                    data, request.task_id, gif_only=gif_only
+                )
         except Exception as e:
             duration = time.time() - start_time
             self._log_request_exception(request, duration, e)
@@ -255,6 +291,24 @@ class OpenAIAdapter(BaseImageAdapter):
         )
         return {"data": images}
 
+    def _configured_output_format(self) -> str:
+        """Return the configured output format, falling back to png."""
+        configured = (
+            str(self.config.extra.get("output_format") or "png").strip().lower()
+        )
+        return configured if configured in {"png", "jpeg", "webp", "gif"} else "png"
+
+    def _resolve_output_format(self, prompt: str) -> str:
+        """Return the output format, letting a prompt keyword override it to GIF."""
+        configured = self._configured_output_format()
+        if configured == "gif" or not _as_bool(self.config.extra.get("auto_gif")):
+            return configured
+        # NFKC folds full-width forms (ＧＩＦ) onto ASCII before matching.
+        normalized = unicodedata.normalize("NFKC", prompt or "").lower()
+        if any(pattern.search(normalized) for pattern in _GIF_PROMPT_PATTERNS):
+            return "gif"
+        return configured
+
     def _build_payload(self, request: GenerationRequest) -> dict:
         """Build the request payload."""
         payload: dict[str, Any] = {
@@ -263,10 +317,8 @@ class OpenAIAdapter(BaseImageAdapter):
             "n": 1,
         }
 
-        output_format = str(self.config.extra.get("output_format") or "png").strip().lower()
-        payload["output_format"] = (
-            output_format if output_format in {"png", "jpeg", "webp", "gif"} else "png"
-        )
+        output_format = self._resolve_output_format(request.prompt)
+        payload["output_format"] = output_format
         if output_format == "gif":
             for key, default, minimum, maximum in (
                 ("frame_count", 9, 2, 16),
@@ -333,9 +385,21 @@ class OpenAIAdapter(BaseImageAdapter):
         return mapping.get(aspect_ratio)
 
     async def _extract_images(
-        self, response: dict, task_id: str | None = None
+        self,
+        response: dict,
+        task_id: str | None = None,
+        *,
+        gif_only: bool = False,
     ) -> tuple[list[bytes] | None, str | None]:
-        """Extract image bytes from the response payload."""
+        """Extract image bytes from the response payload.
+
+        Args:
+            response: Decoded API response.
+            task_id: Task identifier used by the log prefix.
+            gif_only: Drop every non-GIF item. The API returns the animated
+                result together with a static storyboard frame sheet; callers
+                that do not want the sheet keep only the animation.
+        """
         if "data" not in response:
             return None, "响应中未找到 data 字段"
 
@@ -383,18 +447,30 @@ class OpenAIAdapter(BaseImageAdapter):
                     if attempt < 3:
                         await asyncio.sleep(2 ** (attempt - 1))
 
+        if gif_only:
+            kept = [data for data in images if detect_mime_type(data) == "image/gif"]
+            if len(kept) != len(images):
+                logger.info(
+                    f"{self._get_log_prefix(task_id)} GIF 分镜过滤: "
+                    f"保留={len(kept)}张动图，丢弃={len(images) - len(kept)}张静态图"
+                )
+            images = kept
+
         if not images:
             if download_error:
                 return (
                     None,
                     f"图片下载失败（生成请求已完成，请勿自动重试）: {download_error}",
                 )
+            if gif_only:
+                return (
+                    None,
+                    "接口未返回 GIF 动图（生成请求已完成，请勿自动重试）",
+                )
             return None, "未找到有效的图片数据"
 
         return images, None
 
     def _is_retryable_error(self, error: str) -> bool:
-        """Avoid resubmitting a generation after only its result download failed."""
-        if error.startswith("图片下载失败（生成请求已完成"):
-            return False
-        return super()._is_retryable_error(error)
+        """Avoid resubmitting a generation whose result is already unusable."""
+        return "请勿自动重试" not in error and super()._is_retryable_error(error)

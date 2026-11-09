@@ -1,4 +1,9 @@
 ### 更新日志
+- **未发布**
+  - OpenAI 供应商新增 `auto_gif`（默认关闭）：开启后提示词含「GIF」「动画」「动图」时自动改用 GIF 输出，未命中时仍按 `output_format`。关键词匹配先做 NFKC 归一化并转小写，英文关键词只排除紧贴英文字母或数字的情况。
+  - 新增 `send_gif_storyboard`（默认开启）：关闭后 GIF 请求只保留动图字节，不再把接口随动图返回的分镜图发到聊天；静态格式请求不受影响。
+  - GIF 结果筛选后无动图时不再重新提交生成请求：接口已经产出结果，重发只会重复计费。
+
 - **v1.8.5-2026-11-07** ([#75](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/75))
   - OpenAI Images API 新增 GIF 动图输出：文生图与图生图共用输出参数，支持 `frame_count`（2～16）、`frame_duration_ms`（20～2000 毫秒）和独立 `gif_size`（默认 auto）；GIF 自动禁用 SSE，非法帧参数或尺寸在发请求前拒绝。
   - 修复 OpenAI 图生图未发送 `output_format` 的问题；新增 GPT Image 2.6 Sunburst / Flare 模型选项和中英文配置提示，保留原有默认模型与 PNG 输出。
