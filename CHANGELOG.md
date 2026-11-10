@@ -5,6 +5,9 @@
   - 命令、LLM 工具与公共 API 共用原子检查/预留；公共 API 增加可选 `sender_id` / `caller_type`，无身份旧调用维持兼容。LLM 唤醒后继续携带原发送者身份。
   - 修复参考图准备后的并发超额窗口；任务结算与幂等凭据原子持久化，跨日沿用提交日期。失败、取消和重启按已保存图片结算，未使用预留全部释放；关闭历史浏览仍保留最小额度恢复记录。
   - 限制适配器多返回图片时的实际保存数量不超过请求数。管理员、UMO 黑白名单和会话冷却语义保持不变。
+  - OpenAI 供应商新增 `auto_gif`（默认关闭）。开启后，提示词命中 GIF 关键词时自动切换输出格式。 ([#77](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/77))
+  - 新增 `send_gif_storyboard`（默认开启）：关闭后 GIF 请求只保留动图字节，不再把接口随动图返回的分镜图发到聊天；静态格式请求不受影响。
+  - GIF 结果筛选后无动图时不再重新提交生成请求：接口已经产出结果，重发只会重复计费。
 
 - **v1.8.5-2026-11-07** ([#75](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/75))
   - OpenAI Images API 新增 GIF 动图输出：文生图与图生图共用输出参数，支持 `frame_count`（2～16）、`frame_duration_ms`（20～2000 毫秒）和独立 `gif_size`（默认 auto）；GIF 自动禁用 SSE，非法帧参数或尺寸在发请求前拒绝。
