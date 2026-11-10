@@ -31,9 +31,9 @@ from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
 from .core.generation.image_processor import ImageProcessor
 from .core.generation.options import (
-    has_gif_prompt_prefix,
     is_explicit_size,
     parse_generation_options,
+    split_gif_prompt_option,
 )
 from .core.generation.quoted_text import collect_quoted_text, has_quoted_text_source
 from .core.generation.reference_collector import collect_command_reference_images
@@ -163,6 +163,10 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             logger.error(f"{LOG} 适配器配置加载失败，插件未初始化")
 
         self.task_manager.load_generation_history(self.usage_manager)
+        self.task_manager.create_task(
+            self.generation_executor.retry_quota_settlements(),
+            name="image_generation_quota_retry",
+        )
         self.task_manager.configure_generation_queue(
             max_queued_generation_tasks=self.config_manager.max_queued_generation_tasks
         )
@@ -372,6 +376,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         personas: list[str] | None = None,
         source_event: AstrMessageEvent | None = None,
         sender_id: str | None = None,
+        group_id: str | None = None,
         caller_type: str = "auto",
         auto_send: bool = True,
         gif_requested: bool = False,
@@ -391,6 +396,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 )
             sender_id = source_event.get_sender_id()
             message_type = source_event.get_message_type()
+            group_id = source_event.get_group_id()
             caller_type = (
                 "user"
                 if sender_id
@@ -424,6 +430,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             image_count,
             sender_id=sender_id,
             message_type=message_type,
+            group_id=str(group_id or "").strip(),
             is_admin=is_usage_limit_admin,
         )
 
@@ -463,7 +470,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 preset=preset,
                 preset_label=preset_label,
                 usage_scope=unified_msg_origin,
-                quota_version=2,
+                quota_version=3,
                 sender_id=sender_id,
                 quota_caller_type=caller_type,
                 quota_scopes=quota_scopes,
@@ -496,11 +503,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         Args:
             record: Terminal generation task record.
         """
-        if not record.usage_scope or record.quota_released or record.quota_settled:
-            return
-        self.generation_executor.settle_generation_task_quota_once(
-            record.task_id, actual_count=record.result_count or len(record.result_paths)
-        )
+        self.generation_executor.settle_generation_task_quota_once(record.task_id)
 
     # Command handlers.
 
@@ -610,13 +613,13 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             yield event.plain_result("❌ 生图生成器未初始化")
             return
 
-        image_count, prompt = self._parse_command_image_count(raw_prompt)
+        prompt, gif_requested = split_gif_prompt_option(raw_prompt)
+        image_count, prompt = self._parse_command_image_count(prompt)
         options = parse_generation_options(prompt)
         if options.error:
             yield event.plain_result(f"❌ {options.error}")
             return
         prompt = options.prompt
-        gif_requested = has_gif_prompt_prefix(prompt)
 
         aspect_ratio = self.config_manager.default_aspect_ratio
         resolution = self.config_manager.default_resolution
@@ -664,6 +667,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             requested_count=image_count,
             sender_id=event.get_sender_id(),
             message_type=event.get_message_type(),
+            group_id=event.get_group_id(),
         )
         if isinstance(check_result, str):
             if check_result:
@@ -699,8 +703,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                         template_images,
                         task_id=task_id,
                     )
-                except asyncio.CancelledError:
-                    raise
                 except Exception as exc:
                     logger.error(
                         f"{log_prefix('Task', task_id)} 参考图准备失败: {safe_log_text(exc, 200)}",
@@ -725,10 +727,8 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 presets=matched_presets,
                 personas=matched_personas,
                 source_event=event,
-                gif_requested=gif_requested,
+                gif_requested=gif_requested or options.gif_requested,
             )
-        except asyncio.CancelledError:
-            raise
         except GenerationTaskCreationError as exc:
             yield event.plain_result(f"❌ 生图任务提交失败: {exc.message}")
             return

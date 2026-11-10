@@ -308,7 +308,7 @@
           },
           "auto_gif": {
             "description": "Detect GIF from the prompt",
-            "hint": "When enabled, start the original prompt with GIF: to request an animated GIF. Requires GIF support for the model and account."
+            "hint": "When enabled, use gif as a separate, case-insensitive option to request an animated GIF. Requires GIF support for the model and account."
           },
           "send_gif_storyboard": {
             "description": "Send the GIF storyboard",
@@ -976,7 +976,11 @@
       },
       "enable_user_daily_limit": {
         "description": "Enable user daily quota",
-        "hint": "Per real sender within each conversation; independent across groups."
+        "hint": "Per sender, with separate quotas per conversation by default."
+      },
+      "share_user_daily_limit_across_sessions": {
+        "description": "Share user daily quota across conversations",
+        "hint": "Applies when user daily quotas are enabled. A sender shares one quota across groups, channels, and direct messages within the same adapter instance."
       },
       "user_daily_limit_count": {
         "description": "User daily quota",
@@ -1126,7 +1130,7 @@
       "hint": "Configure whether generation task history is persisted, and set history count and retention days.",
       "enable_generation_task_history": {
         "description": "Persist generation task history",
-        "hint": "When enabled, task status, session identifier, prompt summary, result paths, and error summary are saved in the plugin data directory. When disabled, tasks are kept only in runtime memory."
+        "hint": "Disabling this keeps existing history and stops saving new history entries. Minimal records for unsettled quotas are stored separately."
       },
       "generation_task_history_limit": {
         "description": "Generation task history limit",

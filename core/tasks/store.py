@@ -31,10 +31,13 @@ class GenerationTaskStore:
         """
         self._persistence_file = Path(persistence_file) if persistence_file else None
 
-    @property
-    def has_history_file(self) -> bool:
-        """Return whether a persisted history file currently exists."""
-        return bool(self._persistence_file and self._persistence_file.exists())
+    def clear(self) -> None:
+        """Remove a recovery file after its records have been saved or settled."""
+        if self._persistence_file:
+            try:
+                self._persistence_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("%s 清理生图额度恢复文件失败", LOG, exc_info=True)
 
     def load(self) -> list[GenerationTaskRecord]:
         """Load persisted generation task history from disk.

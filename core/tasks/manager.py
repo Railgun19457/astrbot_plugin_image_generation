@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Coroutine
+from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -127,6 +128,10 @@ class TaskManager(
         self._accepting_generation_tasks = False
         self._generation_shutdown = False
         self._generation_store = GenerationTaskStore(persistence_file)
+        history_path = Path(persistence_file) if persistence_file else None
+        self._quota_recovery_store = GenerationTaskStore(
+            history_path.with_suffix(".quota.json") if history_path else None
+        )
 
     def get_generation_queue_rejection(self) -> tuple[str, str] | None:
         """Return the current reason for rejecting a new generation task.
@@ -261,34 +266,31 @@ class TaskManager(
             usage_manager: Optional quota manager. When provided, unsettled
                 reservations are restored before interrupted tasks are closed.
         """
-        if not self._generation_store.has_history_file:
-            return
-
         restored_tasks: dict[str, GenerationTaskRecord] = {}
-        history_changed = False
         now = datetime.now()
-        loaded_records = self._generation_store.load()
+        loaded = {r.task_id: r for r in self._generation_store.load()}
+        recovery_records = self._quota_recovery_store.load()
+        history_changed = bool(recovery_records)
+        for recovery in recovery_records:
+            if existing := loaded.get(recovery.task_id):
+                # History is frozen while disabled. Use the journal's progress
+                # for billing, while keeping any previously saved user metadata.
+                if self._needs_quota_recovery(existing):
+                    existing.result_count = max(
+                        existing.result_count, recovery.result_count
+                    )
+            else:
+                loaded[recovery.task_id] = recovery
+        loaded_records = list(loaded.values())
         if not self._enable_generation_task_history:
             loaded_records = [
-                r
-                for r in loaded_records
-                if not r.quota_settled
-                and not r.quota_released
-                and (r.quota_scopes or r.reserved_count)
+                r for r in loaded_records if self._needs_quota_recovery(r)
             ]
         if usage_manager is not None:
-            history_changed = bool(usage_manager.restore_reservations(loaded_records))
+            history_changed |= usage_manager.restore_reservations(loaded_records)
         for record in loaded_records:
             if record.status in ACTIVE_GENERATION_STATUSES:
-                record.status = GenerationTaskStatus.CANCELLED
-                record.message = "插件重启导致任务中断"
-                record.error = "插件重启导致任务中断"
-                record.finished_at = record.finished_at or now
-                self._mark_unfinished_generation_items(
-                    record,
-                    status=GenerationTaskItemStatus.CANCELLED,
-                    error=record.error,
-                )
+                self._cancel_interrupted_record(record, now)
                 if (
                     usage_manager is not None
                     and record.usage_scope
@@ -298,12 +300,11 @@ class TaskManager(
                     # restore_reservations() reserved quota for this active task.
                     # The task cannot resume after a restart, so settle the
                     # images it produced and release the unused reservation.
-                    usage_manager.settle_task(
+                    settled = usage_manager.settle_task(
                         record,
                         actual_count=record.result_count or len(record.result_paths),
                     )
-                    record.quota_settled = True
-                    record.quota_released = True
+                    record.quota_settled = record.quota_released = settled
                 history_changed = True
             restored_tasks[record.task_id] = record
 
@@ -320,8 +321,18 @@ class TaskManager(
         self._generation_notification_tasks.clear()
         history_changed = self._trim_generation_history() or history_changed
         if history_changed:
-            self._save_generation_tasks()
+            self._save_generation_tasks_after_completion()
         logger.info(f"{LOG} 已加载生图任务历史: {len(self._generation_tasks)} 条")
+
+    def _cancel_interrupted_record(
+        self, record: GenerationTaskRecord, now: datetime
+    ) -> None:
+        record.status = GenerationTaskStatus.CANCELLED
+        record.message = record.error = "插件重启导致任务中断"
+        record.finished_at = record.finished_at or now
+        self._mark_unfinished_generation_items(
+            record, status=GenerationTaskItemStatus.CANCELLED, error=record.error
+        )
 
     def configure_generation_history(
         self,
@@ -343,6 +354,20 @@ class TaskManager(
             0,
             generation_history_retention_days,
         )
+        if enable_generation_task_history and not self._enable_generation_task_history:
+            # A plugin started with history disabled only loaded quota records.
+            now = datetime.now()
+            for record in self._generation_store.load():
+                if record.task_id not in self._generation_tasks:
+                    if record.is_active:
+                        self._cancel_interrupted_record(record, now)
+                        self._generation_terminal_notified.add(record.task_id)
+                    self._generation_tasks[record.task_id] = record
+            self._generation_tasks = dict(
+                sorted(
+                    self._generation_tasks.items(), key=lambda item: item[1].created_at
+                )
+            )
         self._enable_generation_task_history = bool(enable_generation_task_history)
         self._trim_generation_history()
         self._save_generation_tasks()
@@ -366,36 +391,37 @@ class TaskManager(
     def _save_generation_tasks(self) -> None:
         """Persist serializable generation task metadata to disk."""
         records = list(self._generation_tasks.values())
-        if not self._enable_generation_task_history:
-            # Even with browsing history disabled, quota-bearing tasks need a
-            # minimal recovery record. Do not retain prompts or result paths.
-            records = [
-                replace(
-                    r,
-                    prompt="",
-                    prompt_summary="",
-                    error="",
-                    result_paths=[],
-                    delivered_paths=[],
-                )
-                for r in records
-                if not r.quota_settled
-                and not r.quota_released
-                and (r.quota_scopes or r.reserved_count)
-            ]
-        self._generation_store.save(records)
+        if self._enable_generation_task_history:
+            self._generation_store.save(records)
+            self._quota_recovery_store.clear()
+            return
 
-    def _safe_generation_item_status(self, value: Any) -> GenerationTaskItemStatus:
-        """Coerce raw persisted item status to a known enum value.
+        # Keep quota recovery separate from the history that was saved before
+        # disabling the setting. Recovery does not need prompts or file paths.
+        recovery_records = [
+            replace(
+                record,
+                prompt="",
+                prompt_summary="",
+                message="",
+                error="",
+                result_count=record.result_count or len(record.result_paths),
+                result_paths=[],
+                delivered_paths=[],
+                items={},
+            )
+            for record in records
+            if self._needs_quota_recovery(record)
+        ]
+        if recovery_records:
+            self._quota_recovery_store.save(recovery_records)
+        else:
+            self._quota_recovery_store.clear()
 
-        Args:
-            value: Raw persisted item status value.
-
-        Returns:
-            A valid generation item status. Unknown values fall back to
-            ``pending`` so unfinished legacy records remain visible.
-        """
-        return coerce_generation_item_status(value)
+    def _save_generation_tasks_after_completion(self) -> None:
+        # The store logs write failures. Completion callbacks still need to run.
+        with suppress(OSError):
+            self._save_generation_tasks()
 
     def _mark_unfinished_generation_items(
         self,
@@ -543,7 +569,7 @@ class TaskManager(
             safe_index,
             GenerationTaskItem(index=safe_index),
         )
-        item.status = self._safe_generation_item_status(status)
+        item.status = coerce_generation_item_status(status)
         item.result_count = max(0, result_count)
         item.error = (
             safe_log_error_body(
@@ -661,7 +687,7 @@ class TaskManager(
                 结果=f"{record.result_count}张",
             )
         )
-        self._save_generation_tasks()
+        self._save_generation_tasks_after_completion()
         self._notify_generation_task_terminal(task_id)
 
     def mark_generation_task_failed(self, task_id: str, error: str) -> None:
@@ -682,7 +708,7 @@ class TaskManager(
             # The summary line is capped for readability; log the retained error
             # separately so the log alone is enough to diagnose the failure.
             logger.warning(f"{log_prefix('Task', task_id)} 错误详情: {record.error}")
-        self._save_generation_tasks()
+        self._save_generation_tasks_after_completion()
         self._notify_generation_task_terminal(task_id)
 
     def mark_generation_task_cancelled(
@@ -704,21 +730,15 @@ class TaskManager(
                 原因=format_optional(reason),
             )
         )
-        self._save_generation_tasks()
+        self._save_generation_tasks_after_completion()
         self._notify_generation_task_terminal(task_id)
-
-    def mark_generation_task_quota_released(self, task_id: str) -> None:
-        """Mark that the task's reserved quota has been released."""
-        if record := self._generation_tasks.get(task_id):
-            record.quota_released = True
-            self._save_generation_tasks()
 
     def mark_generation_task_quota_settled(self, task_id: str) -> None:
         """Mark that the task's reserved quota has been settled."""
         if record := self._generation_tasks.get(task_id):
             record.quota_settled = True
             record.quota_released = True
-            self._save_generation_tasks()
+            self._save_generation_tasks_after_completion()
 
     def mark_unfinished_generation_task_items_cancelled(
         self,
@@ -784,12 +804,19 @@ class TaskManager(
         return True, f"✅ 任务已取消: {task_id}"
 
     @staticmethod
-    def _must_keep_quota_record(record: GenerationTaskRecord) -> bool:
-        return record.is_active or bool(
-            (record.quota_scopes or record.reserved_count)
+    def _needs_quota_recovery(record: GenerationTaskRecord) -> bool:
+        return bool(
+            (
+                record.quota_scopes
+                or record.reserved_count
+                or (record.quota_version == 1 and record.usage_scope)
+            )
             and not record.quota_settled
             and not record.quota_released
         )
+
+    def _must_keep_quota_record(self, record: GenerationTaskRecord) -> bool:
+        return record.is_active or self._needs_quota_recovery(record)
 
     def _trim_generation_history(self) -> bool:
         """Keep finished task history bounded while preserving active tasks."""

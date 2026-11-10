@@ -205,6 +205,9 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
             user_daily_limit_count=self._get_int(
                 cfg, "user_daily_limit_count", DEFAULT_DAILY_LIMIT_COUNT, min_value=1
             ),
+            share_user_daily_limit_across_sessions=self._get_bool(
+                cfg, "share_user_daily_limit_across_sessions", False
+            ),
             max_image_size_mb=self._get_int(
                 cfg,
                 "max_image_size_mb",

@@ -360,15 +360,19 @@ class LLMResultHandler:
         )
 
         session = MessageSession.from_str(record.unified_msg_origin)
+        sender_id = record.sender_id or source_event.get_sender_id()
         cron_event = CronMessageEvent(
             context=self.context,
             session=session,
             message=f"图像生成任务 {record.task_id} 已完成",
             # Preserve the original human identity for any further tool calls.
-            sender_id=record.sender_id or source_event.get_sender_id(),
+            sender_id=sender_id,
             sender_name="ImageGeneration",
             message_type=session.message_type,
         )
+        # CronMessageEvent uses its sender_id argument for self_id, not sender.
+        cron_event.message_obj.sender.user_id = sender_id
+        cron_event.message_obj.group_id = source_event.get_group_id()
         cron_event.role = source_event.role
         cron_event.plugins_name = source_event.plugins_name
 

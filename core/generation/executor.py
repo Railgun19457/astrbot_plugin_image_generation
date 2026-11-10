@@ -187,37 +187,33 @@ class GenerationExecutor:
                 gif_requested=gif_requested,
             )
         except Exception:
-            self.release_generation_task_quota_once(task_id)
+            self.settle_generation_task_quota_once(task_id)
             raise
 
-    def release_generation_task_quota_once(self, task_id: str) -> None:
-        """Release reserved quota for one task at most once.
-
-        Args:
-            task_id: Generation task ID whose reservation should be released.
-        """
-        record = self.task_manager.get_generation_task(task_id)
-        if (
-            not record
-            or not record.usage_scope
-            or record.quota_released
-            or record.quota_settled
-        ):
-            return
-        self.settle_generation_task_quota_once(
-            task_id, actual_count=record.result_count or len(record.result_paths)
-        )
-
     def settle_generation_task_quota_once(
-        self, task_id: str, *, actual_count: int
+        self, task_id: str, *, actual_count: int | None = None
     ) -> None:
         """Persist usage and its receipt before marking task history settled."""
         record = self.task_manager.get_generation_task(task_id)
         if not record or record.quota_settled or record.quota_released:
             return
-        self.usage_manager.settle_task(record, actual_count=actual_count)
+        if actual_count is None:
+            if not record.usage_scope:
+                return
+            actual_count = record.result_count or len(record.result_paths)
+        if not self.usage_manager.settle_task(record, actual_count=actual_count):
+            return
         record.quota_usage_summary = self.usage_manager.format_usage(record)
         self.task_manager.mark_generation_task_quota_settled(task_id)
+
+    async def retry_quota_settlements(self) -> None:
+        """Retry quota writes independently of task completion callbacks."""
+        while True:
+            await asyncio.sleep(2)
+            for task_id, actual_count in self.usage_manager.pending_settlements():
+                self.settle_generation_task_quota_once(
+                    task_id, actual_count=actual_count
+                )
 
     async def _do_generate_and_send(
         self,
@@ -481,8 +477,6 @@ class GenerationExecutor:
                     current_index = pending_tasks.pop(done_task)
                     try:
                         result = done_task.result()
-                    except asyncio.CancelledError:
-                        raise
                     except Exception as exc:
                         result = None
                         error_message = (

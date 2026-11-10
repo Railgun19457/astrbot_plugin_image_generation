@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from typing import Any
@@ -25,7 +24,7 @@ from ..config.templates import (
 from ..config.templates import (
     normalize_name_items as _normalize_name_items,
 )
-from ..generation.options import has_gif_prompt_prefix, is_explicit_size
+from ..generation.options import is_explicit_size, split_gif_prompt_option
 from ..generation.reference_collector import (
     ContextReferenceImageNotFoundError,
     collect_tool_reference_images,
@@ -120,6 +119,7 @@ async def _start_generation_task(
         requested_count=image_count,
         sender_id=event.get_sender_id(),
         message_type=event.get_message_type(),
+        group_id=event.get_group_id(),
     )
     if isinstance(check_result, str):
         if check_result:
@@ -183,8 +183,6 @@ async def _start_generation_task(
             source_event=event,
             gif_requested=gif_requested,
         )
-    except asyncio.CancelledError:
-        raise
     except GenerationTaskCreationError as exc:
         return f"❌ 生图任务提交失败: {exc.message} ({exc.code})"
     except ContextReferenceImageNotFoundError:
@@ -227,7 +225,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "生图时使用的额外提示词。仅在用户明确要求 GIF 动图时以 GIF: 开头。设置 preset 或 persona 时可留空。",
+                    "description": "生图时使用的额外提示词。仅在用户明确要求 GIF 动图时，在提示词末尾加空格和 gif。设置 preset 或 persona 时可留空。",
                 },
                 "preset": {
                     "type": "string",
@@ -284,8 +282,8 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
         if not plugin:
             return "❌ 插件未正确初始化 (Plugin instance missing)"
 
-        prompt = str(kwargs.get("prompt", "") or "").strip()
-        gif_requested = has_gif_prompt_prefix(prompt)
+        prompt, gif_requested = split_gif_prompt_option(kwargs.get("prompt", ""))
+        prompt = prompt.strip()
         raw_aspect_ratio = kwargs.get("aspect_ratio")
         raw_resolution = kwargs.get("resolution")
         aspect_ratio = raw_aspect_ratio or plugin.config_manager.default_aspect_ratio

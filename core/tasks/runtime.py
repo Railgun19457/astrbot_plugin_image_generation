@@ -189,8 +189,6 @@ class GenerationQueueRunnerMixin:
                     await self._run_generation_queue_item(queue_item)
                 finally:
                     self._generation_queue.task_done()
-        except asyncio.CancelledError:
-            raise
         except Exception as exc:
             logger.error(
                 f"{LOG} 生图任务 worker {worker_index} 异常退出: {safe_log_error_body(exc)}",
@@ -559,7 +557,7 @@ class GenerationTaskNotifierMixin:
             return
 
         # Terminal callbacks may update quota settlement flags.
-        self._save_generation_tasks()
+        self._save_generation_tasks_after_completion()
 
         while done_callbacks := self._generation_done_callbacks.pop(task_id, []):
             for callback in done_callbacks:
@@ -571,7 +569,7 @@ class GenerationTaskNotifierMixin:
             event.set()
 
         self._trim_generation_history()
-        self._save_generation_tasks()
+        self._save_generation_tasks_after_completion()
 
     def _on_generation_notification_done(
         self,

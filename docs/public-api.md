@@ -48,6 +48,8 @@ api = image_plugin.public_api
 
 只有个人额度启用而调用方未传 sender_id 时，兼容旧调用仍然可用，个人额度不会生效。公共 API 是受信任的插件间 Python 接口，不能依靠可省略身份参数阻止恶意插件；面向用户的调用方应传真实事件身份，后台系统任务则明确标注 `caller_type="system"`。`is_admin` 也应来自 `event.is_admin()`，不可由用户文本或 LLM 决定。
 
+开启跨会话共享后，个人额度在同一适配器实例内按发送者汇总。群聊调用可同时传入 `group_id=event.get_group_id()`，让群额度使用实际群或频道标识，尤其适用于隔离 UMO。
+
 任务记录持久化调用身份、发送者、两层额度键、提交日期、预留数量和豁免状态。结果仍通过原 UMO 归属，取消/查询的会话权限不改为 sender_id。等待接口超时只代表调用方停止等待，任务仍执行并保留额度，最终按实际结果结算；需取消时调用取消接口。
 
 ## 接口总览
@@ -81,6 +83,7 @@ async def submit_generation_task(
     personas: str | list[str] | None = None,
     is_admin: bool = False,
     sender_id: str | None = None,
+    group_id: str | None = None,
     caller_type: str = "auto",
 ) -> ImageGenerationSubmitResult
 ```
@@ -101,6 +104,7 @@ async def submit_generation_task(
 | `personas` | 一个或多个人设名。字符串可用空格分隔多个名称；人设参考图会在模型支持图生图时自动加入。 |
 | `is_admin` | 仅在传入 `unified_msg_origin` 时生效，用于 AstrBot 管理员额度豁免判断，豁免后仍记录用量。 |
 | `sender_id` | 可选真实发送者 ID；请直接传 `event.get_sender_id()`。与 UMO 一起用于个人额度，不接受昵称、提示词推断或群 UMO 冒充个人。 |
+| `group_id` | 可选实际群或频道 ID，取自 `event.get_group_id()`。用于标准群聊 UMO 的共享群额度。 |
 | `caller_type` | 默认 `"auto"`：根据是否提供 UMO / sender_id 区分用户、旧版会话和系统调用。可显式传 `"user"`、`"legacy"`、`"system"`，见下文。 |
 
 ### 行为
@@ -272,6 +276,7 @@ async def generate_image_files(
     personas: str | list[str] | None = None,
     is_admin: bool = False,
     sender_id: str | None = None,
+    group_id: str | None = None,
     caller_type: str = "auto",
     timeout_seconds: float | None = None,
     poll_interval_seconds: float = 0.5,
@@ -338,6 +343,7 @@ result = await api.generate_image_files(
     unified_msg_origin=event.unified_msg_origin,
     is_admin=event.is_admin(),
     sender_id=event.get_sender_id(),
+    group_id=event.get_group_id(),
     caller_type="user",
     source="astrbot_plugin_example",
     timeout_seconds=180,

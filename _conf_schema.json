@@ -303,7 +303,7 @@
           },
           "auto_gif": {
             "description": "自动识别 GIF",
-            "hint": "开启后，原始提示词以 GIF:、动图：或动画：开头时改用 GIF 输出。需要模型和账号支持 GIF。",
+            "hint": "开启后，可用空格分隔的 gif 参数请求动图，例如 /生图 小猫摇尾巴 gif。大小写均可，需要模型和账号支持 GIF。",
             "type": "bool",
             "default": false
           },
@@ -1656,7 +1656,13 @@
       },
       "enable_user_daily_limit": {
         "description": "启用个人每日额度",
-        "hint": "按 UMO 与真实发送者 ID 独立统计，同一用户在不同群额度独立。",
+        "hint": "按真实发送者统计，默认各会话独立。可开启跨会话共享。",
+        "type": "bool",
+        "default": false
+      },
+      "share_user_daily_limit_across_sessions": {
+        "description": "个人每日额度跨会话共享",
+        "hint": "开启个人每日额度后生效。同一适配器实例内，同一用户在各群、频道和私聊共用一份额度。",
         "type": "bool",
         "default": false
       },
@@ -1959,7 +1965,7 @@
     "items": {
       "enable_generation_task_history": {
         "description": "持久化生图任务历史",
-        "hint": "开启后会将任务状态、会话标识、提示词摘要、结果路径和错误摘要保存到插件数据目录；关闭后仅保留运行时内存任务。",
+        "hint": "关闭后保留已有历史，停止新增历史记录；未结算额度另存最小恢复记录。",
         "type": "bool",
         "default": true
       },

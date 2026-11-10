@@ -8,10 +8,12 @@ import math
 import os
 import time
 from collections.abc import Iterable
+from contextlib import suppress
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from astrbot.api import logger
 from astrbot.core.platform.message_session import MessageSession
 from astrbot.core.platform.message_type import MessageType
 
@@ -29,8 +31,8 @@ _MAX_COOLDOWN_ENTRIES = 4096
 class UsageManager:
     """One accounting service for every generation entry point.
 
-    Legacy date/UMO counts stay at the root of usage.json. Personal counts and
-    task settlement receipts occupy separate namespaces in the same atomic file.
+    Legacy date/UMO counts stay at the root of usage.json. Group counts, personal
+    counts and task settlement receipts have separate namespaces.
     A receipt and its increments are committed together, closing the crash gap
     between usage.json and generation task history.
     """
@@ -40,9 +42,11 @@ class UsageManager:
         self._usage_file = Path(data_dir) / "usage.json"
         self._lock = RLock()
         self._usage_data: dict[str, dict[str, int]] = {}
+        self._group_usage: dict[str, dict[str, int]] = {}
         self._user_usage: dict[str, dict[str, int]] = {}
         self._receipts: dict[str, str] = {}
         self._reservations: dict[str, tuple[str, dict[str, str], int]] = {}
+        self._pending_settlements: dict[str, int] = {}
         self._user_request_timestamps: dict[str, float] = {}
         self._load_usage_data()
 
@@ -80,6 +84,7 @@ class UsageManager:
             return result
 
         self._usage_data = normalize(loaded)
+        self._group_usage = normalize(loaded.get("_group_usage", {}))
         self._user_usage = normalize(loaded.get("_user_usage", {}))
         self._receipts = {
             str(k): str(v) for k, v in loaded.get("_quota_receipts", {}).items()
@@ -89,6 +94,7 @@ class UsageManager:
         self._usage_file.parent.mkdir(parents=True, exist_ok=True)
         temp = self._usage_file.with_name(self._usage_file.name + ".tmp")
         payload = dict(self._usage_data)
+        payload["_group_usage"] = self._group_usage
         payload["_user_usage"] = self._user_usage
         payload["_quota_receipts"] = self._receipts
         with temp.open("w", encoding="utf-8") as f:
@@ -107,15 +113,18 @@ class UsageManager:
         return json.dumps([scope, sender_id], ensure_ascii=False, separators=(",", ":"))
 
     def quota_scopes(
-        self, scope: str, sender_id: str = "", message_type: MessageType | None = None
+        self,
+        scope: str,
+        sender_id: str = "",
+        message_type: MessageType | None = None,
+        group_id: str = "",
     ) -> dict[str, str]:
         if not scope:
             return {}  # Historical system API call, no user/conversation quotas.
         if message_type is None:
-            try:
+            # Opaque legacy API UMO keeps its session limit.
+            with suppress(ValueError, TypeError):
                 message_type = MessageSession.from_str(scope).message_type
-            except (ValueError, TypeError):
-                pass  # Opaque legacy API UMO: keep its session limit.
         scopes = {}
         if self._settings.enable_group_daily_limit:
             layer = (
@@ -127,20 +136,91 @@ class UsageManager:
                     else "session"
                 )
             )
-            scopes[layer] = scope
+            scopes[layer] = (
+                self._group_scope(scope, group_id) if layer == "group" else scope
+            )
         if self._settings.enable_user_daily_limit and sender_id:
             scopes["user"] = self.user_quota_key(scope, sender_id)
         return scopes
 
     def _counts(self, layer: str) -> dict[str, dict[str, int]]:
+        if layer == "group":
+            return self._group_usage
         return self._user_usage if layer == "user" else self._usage_data
 
-    def _reserved(self, day: str, layer: str, scope: str) -> int:
-        return sum(
-            count
-            for date, scopes, count in self._reservations.values()
-            if date == day and scopes.get(layer) == scope
+    @staticmethod
+    def _group_scope(scope: str, group_id: str = "") -> str:
+        platform, separator, session_id = scope.partition(
+            f":{MessageType.GROUP_MESSAGE.value}:"
         )
+        if not platform or not session_id:
+            return scope
+        if not group_id:
+            # Older OneBot, Slack and Lark UMO formats embed the group ID.
+            sender, underscore, group = session_id.rpartition("_")
+            if underscore and (
+                (sender.isdecimal() and group.isdecimal())
+                or (
+                    sender.startswith(("U", "W"))
+                    and group.startswith(("C", "G"))
+                    and sender.isalnum()
+                    and group.isalnum()
+                )
+            ):
+                group_id = group
+            elif "%" in session_id:
+                sender, _, group = session_id.rpartition("%")
+                if sender.startswith("ou_") and group.startswith("oc_"):
+                    group_id = group
+        return f"{platform}{separator}{group_id}" if group_id else scope
+
+    @staticmethod
+    def _user_bucket(scope: str) -> str | tuple[str, str]:
+        try:
+            umo, sender = json.loads(scope)
+            session = MessageSession.from_str(umo)
+        except (ValueError, TypeError, AttributeError):
+            return scope
+        return session.platform_id, sender
+
+    def _quota_bucket(self, layer: str, scope: str) -> str | tuple[str, str]:
+        if layer == "user" and self._settings.share_user_daily_limit_across_sessions:
+            return self._user_bucket(scope)
+        return scope
+
+    def _used(self, day: str, layer: str, scope: str) -> int:
+        with self._lock:
+            counts = self._counts(layer).get(day, {})
+            if layer == "group":
+                return counts.get(scope, 0) + sum(
+                    count
+                    for key, count in self._usage_data.get(day, {}).items()
+                    if self._group_scope(key) == scope
+                )
+            if (
+                layer == "user"
+                and self._settings.share_user_daily_limit_across_sessions
+            ):
+                bucket = self._user_bucket(scope)
+                return sum(
+                    count
+                    for key, count in counts.items()
+                    if self._user_bucket(key) == bucket
+                )
+            return counts.get(scope, 0)
+
+    def _reserved(self, day: str, layer: str, scope: str) -> int:
+        bucket = self._quota_bucket(layer, scope)
+        total = 0
+        for date, scopes, count in self._reservations.values():
+            if date != day:
+                continue
+            reserved_scope = scopes.get(layer, "")
+            if layer == "group" and not reserved_scope:
+                reserved_scope = self._group_scope(scopes.get("session", ""))
+            if reserved_scope and self._quota_bucket(layer, reserved_scope) == bucket:
+                total += count
+        return total
 
     def _check_quota(self, scopes: dict[str, str], count: int, day: str) -> bool | str:
         for layer, scope in scopes.items():
@@ -149,7 +229,7 @@ class UsageManager:
                 if layer == "user"
                 else self._settings.group_daily_limit_count
             )
-            used = self._counts(layer).get(day, {}).get(scope, 0)
+            used = self._used(day, layer, scope)
             if used + self._reserved(day, layer, scope) + count > limit:
                 if layer == "group":
                     return "❌ 本群今日生图额度已用完，请明天再试。"
@@ -174,9 +254,7 @@ class UsageManager:
             return True
         return uid in self._settings.umo_whitelist
 
-    def _check_access_and_cooldown(self, scope: str, is_admin: bool) -> bool | str:
-        if self.is_limit_exempt(scope, is_admin=is_admin):
-            return True
+    def _check_access_and_cooldown(self, scope: str) -> bool | str:
         if self.is_session_blocked(scope):
             return self._settings.blacklist_block_message
         if self._settings.rate_limit_seconds > 0:
@@ -194,17 +272,18 @@ class UsageManager:
         requested_count: int = 1,
         sender_id: str = "",
         message_type: MessageType | None = None,
+        group_id: str = "",
     ) -> bool | str:
         """Read-only preview; admission checks again after asynchronous preparation."""
         user_id = str(user_id or "").strip()
         with self._lock:
-            check = self._check_access_and_cooldown(user_id, is_admin)
-            if isinstance(check, str) or self.is_limit_exempt(
-                user_id, is_admin=is_admin
-            ):
+            if self.is_limit_exempt(user_id, is_admin=is_admin):
+                return True
+            check = self._check_access_and_cooldown(user_id)
+            if isinstance(check, str):
                 return check
             return self._check_quota(
-                self.quota_scopes(user_id, sender_id, message_type),
+                self.quota_scopes(user_id, sender_id, message_type, group_id),
                 max(1, requested_count),
                 self._today(),
             )
@@ -217,6 +296,7 @@ class UsageManager:
         *,
         sender_id: str = "",
         message_type: MessageType | None = None,
+        group_id: str = "",
         is_admin: bool = False,
     ) -> tuple[str, dict[str, str], bool]:
         """Check BOTH layers and reserve all or nothing, without any await."""
@@ -225,12 +305,13 @@ class UsageManager:
                 raise GenerationTaskCreationError(
                     "task_id_conflict", "生图任务 ID 冲突"
                 )
-            check = self._check_access_and_cooldown(scope, is_admin)
-            if isinstance(check, str):
-                raise GenerationTaskCreationError("rate_limited", check)
-            scopes = self.quota_scopes(scope, sender_id, message_type)
-            day = self._today()
             exempt = self.is_limit_exempt(scope, is_admin=is_admin)
+            if not exempt and isinstance(
+                check := self._check_access_and_cooldown(scope), str
+            ):
+                raise GenerationTaskCreationError("rate_limited", check)
+            scopes = self.quota_scopes(scope, sender_id, message_type, group_id)
+            day = self._today()
             if not exempt:
                 check = self._check_quota(scopes, count, day)
                 if isinstance(check, str):
@@ -247,7 +328,10 @@ class UsageManager:
 
     def _record_scopes(self, record: Any) -> dict[str, str]:
         if record.quota_version >= 2:
-            return dict(record.quota_scopes)
+            scopes = dict(record.quota_scopes)
+            if record.quota_version == 2 and "group" in scopes:
+                scopes["group"] = self._group_scope(scopes["group"])
+            return scopes
         # No reconstructed sender: pre-upgrade tasks keep ONLY their old UMO.
         if record.usage_scope and (
             record.reserved_count or self._settings.enable_group_daily_limit
@@ -255,22 +339,27 @@ class UsageManager:
             return {"session": record.usage_scope}
         return {}
 
-    def settle_task(self, record: Any, *, actual_count: int) -> None:
+    def pending_settlements(self) -> tuple[tuple[str, int], ...]:
+        with self._lock:
+            return tuple(self._pending_settlements.items())
+
+    def settle_task(self, record: Any, *, actual_count: int) -> bool:
         """Commit counts and the idempotency receipt in one atomic replacement."""
         with self._lock:
-            if record.task_id in self._receipts:
-                self._reservations.pop(record.task_id, None)
-                return
-            if record.quota_settled or record.quota_released:
-                self._reservations.pop(record.task_id, None)
-                return
+            actual_count = self._pending_settlements.get(record.task_id, actual_count)
             scopes = self._record_scopes(record)
-            if not scopes:
+            if (
+                record.task_id in self._receipts
+                or record.quota_settled
+                or record.quota_released
+                or not scopes
+                or actual_count <= 0
+            ):
                 self._reservations.pop(record.task_id, None)
-                return
+                self._pending_settlements.pop(record.task_id, None)
+                return True
             day = record.quota_date or record.created_at.date().isoformat()
             # Preserve actual output accounting, including exempt requests.
-            actual_count = max(0, actual_count)
             previous = []
             for layer, scope in scopes.items():
                 counts = self._counts(layer).setdefault(day, {})
@@ -280,12 +369,23 @@ class UsageManager:
             self._receipts[record.task_id] = day
             try:
                 self._save_usage_data()
-            except Exception:
+            except OSError:
                 self._receipts.pop(record.task_id, None)
                 for counts, scope, before in previous:
                     counts[scope] = before
-                raise  # Keep reservations on disk failure; never silently undercharge.
+                if record.task_id not in self._pending_settlements:
+                    logger.warning(
+                        "%s 生图额度写入失败，将重试: %s",
+                        LOG,
+                        record.task_id,
+                        exc_info=True,
+                    )
+                self._reservations[record.task_id] = (day, scopes, actual_count)
+                self._pending_settlements[record.task_id] = actual_count
+                return False
             self._reservations.pop(record.task_id, None)
+            self._pending_settlements.pop(record.task_id, None)
+            return True
 
     def restore_reservations(self, records: Iterable[Any]) -> bool:
         """Restore scopes from task records; old tasks never gain personal usage."""
@@ -318,19 +418,13 @@ class UsageManager:
                             record.reserved_count,
                         )
                 else:
-                    self.settle_task(
+                    settled = self.settle_task(
                         record,
                         actual_count=record.result_count or len(record.result_paths),
                     )
-                    record.quota_settled = record.quota_released = True
-                    changed = True
+                    record.quota_settled = record.quota_released = settled
+                    changed |= settled
         return changed
-
-    def get_usage_count(self, user_id: str) -> int:
-        return self._usage_data.get(self._today(), {}).get(user_id, 0)
-
-    def get_daily_limit(self) -> int:
-        return self._settings.group_daily_limit_count
 
     def is_daily_limit_enabled(self) -> bool:
         return bool(
@@ -342,28 +436,29 @@ class UsageManager:
         """Display today's real counts using the task's snapshotted identities."""
         parts = []
         scopes = self._record_scopes(record)
-        for layer in ("user", "group", "private", "session"):
+        day = self._today()
+        exempt = (
+            record.quota_exempt
+            if record.quota_version >= 2
+            else self.is_limit_exempt(
+                record.usage_scope, is_admin=record.is_usage_limit_admin
+            )
+        )
+        labels = {
+            "user": "个人",
+            "group": "群聊",
+            "private": "私聊兼容",
+            "session": "会话",
+        }
+        for layer, label in labels.items():
             scope = scopes.get(layer)
             if not scope:
                 continue
-            label = {
-                "user": "个人",
-                "group": "群聊",
-                "private": "私聊兼容",
-                "session": "会话",
-            }[layer]
-            used = self._counts(layer).get(self._today(), {}).get(scope, 0)
+            used = self._used(day, layer, scope)
             limit = (
                 self._settings.user_daily_limit_count
                 if layer == "user"
                 else self._settings.group_daily_limit_count
-            )
-            exempt = (
-                record.quota_exempt
-                if record.quota_version >= 2
-                else self.is_limit_exempt(
-                    record.usage_scope, is_admin=record.is_usage_limit_admin
-                )
             )
             parts.append(f"{label} {used}/{'∞' if exempt else limit}")
         return "📅 今日生图：" + "，".join(parts) if parts else ""

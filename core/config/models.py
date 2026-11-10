@@ -43,6 +43,7 @@ class UsageSettings:
     group_daily_limit_count: int | None = None
     enable_user_daily_limit: bool = False
     user_daily_limit_count: int = DEFAULT_DAILY_LIMIT_COUNT
+    share_user_daily_limit_across_sessions: bool = False
     max_image_size_mb: int = DEFAULT_MAX_IMAGE_SIZE_MB
     umo_blacklist: list[str] = field(default_factory=list)
     admin_bypass_limits: bool = True

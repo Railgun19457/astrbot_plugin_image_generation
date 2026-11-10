@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from astrbot.api import logger
@@ -14,7 +13,7 @@ from ..config.templates import (
     normalize_name_items,
     resolve_named_templates,
 )
-from ..generation.options import has_gif_prompt_prefix, is_explicit_size
+from ..generation.options import is_explicit_size, split_gif_prompt_option
 from ..generation.reference_collector import (
     collect_reference_images_from_templates,
     deduplicate_reference_images,
@@ -70,6 +69,7 @@ class ImageGenerationPublicAPI:
         personas: str | list[str] | None = None,
         is_admin: bool = False,
         sender_id: str | None = None,
+        group_id: str | None = None,
         caller_type: str = "auto",
     ) -> ImageGenerationSubmitResult:
         """Submit a background image generation task and return its task id."""
@@ -99,6 +99,7 @@ class ImageGenerationPublicAPI:
         )
         final_aspect_ratio = aspect_ratio or plugin.config_manager.default_aspect_ratio
         final_resolution = resolution or plugin.config_manager.default_resolution
+        prompt, gif_requested = split_gif_prompt_option(prompt)
 
         (
             final_prompt,
@@ -138,6 +139,7 @@ class ImageGenerationPublicAPI:
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
                 sender_id=str(sender_id or "").strip(),
+                group_id=str(group_id or "").strip(),
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -192,13 +194,14 @@ class ImageGenerationPublicAPI:
                 source=request_source,
                 prompt=final_prompt,
                 images_data=references,
-                gif_requested=has_gif_prompt_prefix(prompt),
+                gif_requested=gif_requested,
                 unified_msg_origin=scope,
                 aspect_ratio=str(final_aspect_ratio),
                 resolution=str(final_resolution),
                 image_count=requested_count,
                 is_usage_limit_admin=safe_is_admin,
                 sender_id=sender_id,
+                group_id=group_id,
                 caller_type=caller_type,
                 preset=preset_summary,
                 preset_label=preset_label,
@@ -223,8 +226,6 @@ class ImageGenerationPublicAPI:
                 exc.message,
                 error=exc.code,
             )
-        except asyncio.CancelledError:
-            raise
         except Exception as exc:
             logger.error(
                 f"{log_prefix('PublicAPI', task_id)} "
@@ -382,6 +383,7 @@ class ImageGenerationPublicAPI:
         personas: str | list[str] | None = None,
         is_admin: bool = False,
         sender_id: str | None = None,
+        group_id: str | None = None,
         caller_type: str = "auto",
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
@@ -400,6 +402,7 @@ class ImageGenerationPublicAPI:
             personas=personas,
             is_admin=is_admin,
             sender_id=sender_id,
+            group_id=group_id,
             caller_type=caller_type,
         )
         if not submit_result.ok or not submit_result.task_id:
