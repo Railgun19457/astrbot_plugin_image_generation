@@ -46,6 +46,8 @@ MIN_NUMBER_VALUES: dict[str, int | float] = {
     "user_limits.rate_limit_seconds": 0,
     "user_limits.max_image_size_mb": 1,
     "user_limits.daily_limit_count": 1,
+    "user_limits.group_daily_limit_count": 1,
+    "user_limits.user_daily_limit_count": 1,
     "safety_audit.prompt_audit.max_retry_attempts": 1,
     "safety_audit.image_audit.max_retry_attempts": 1,
 }

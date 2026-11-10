@@ -117,6 +117,8 @@ async def _start_generation_task(
         event.unified_msg_origin,
         is_admin=is_usage_limit_admin,
         requested_count=image_count,
+        sender_id=event.get_sender_id(),
+        message_type=event.get_message_type(),
     )
     if isinstance(check_result, str):
         if check_result:
@@ -134,18 +136,6 @@ async def _start_generation_task(
     if rejection := plugin.task_manager.get_generation_queue_rejection():
         code, message = rejection
         return f"❌ 生图任务提交失败: {message} ({code})"
-
-    check_result = plugin.usage_manager.check_rate_limit(
-        event.unified_msg_origin,
-        is_admin=is_usage_limit_admin,
-        requested_count=image_count,
-    )
-    if isinstance(check_result, str):
-        if check_result:
-            masked_uid = mask_sensitive(event.unified_msg_origin)
-            logger.info(f"{LOG} 工具调用触发限制: {check_result} (用户: {masked_uid})")
-        return check_result
-    task_created = False
 
     task_id = new_task_id()
     try:
@@ -191,41 +181,13 @@ async def _start_generation_task(
             personas=personas,
             source_event=event,
         )
-        task_created = True
     except asyncio.CancelledError:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
         raise
     except GenerationTaskCreationError as exc:
         return f"❌ 生图任务提交失败: {exc.message} ({exc.code})"
     except ContextReferenceImageNotFoundError:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
         return "❌ 未找到可用的聊天图片，已取消改图任务；请重新发送或引用图片后再试"
     except Exception as exc:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
         logger.error(
             f"{log_prefix('LLMTool', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
             exc_info=True,

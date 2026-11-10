@@ -340,6 +340,7 @@ def build_result_info_message(
     duration: float,
     result_count: int,
     task_id: str,
+    quota_record: GenerationTaskRecord | None = None,
 ) -> str:
     """Build the optional metadata appended to generated image messages."""
     info_parts: list[str] = []
@@ -363,16 +364,9 @@ def build_result_info_message(
     if (
         config_manager.should_show_result_info(RESULT_INFO_USAGE)
         and usage_manager.is_daily_limit_enabled()
+        and quota_record
+        and (usage_info := usage_manager.format_usage(quota_record))
     ):
-        count = usage_manager.get_usage_count(unified_msg_origin)
-        daily_limit = (
-            "∞"
-            if usage_manager.is_limit_exempt(
-                unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-            )
-            else str(usage_manager.get_daily_limit())
-        )
-        info_parts.append(f"📅 今日用量: {count}/{daily_limit}")
+        info_parts.append(usage_info)
 
     return "\n".join(info_parts)

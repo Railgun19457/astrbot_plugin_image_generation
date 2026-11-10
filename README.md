@@ -12,8 +12,16 @@
 - **任务体系**：支持多图生成、请求级并发、任务级队列和分批发送；可查看/取消任务，任务历史与生成图片均可持久化。
 - **LLM 工具**：`generate_image`、`query_image_presets`、`manage_image_tasks`，可选启用 `edit_image_presets`。
 - **预设与人设**：预设模板支持提示词、宽高比、分辨率和参考图；支持多人设拼接、人设参考图，可选正文名称匹配；旧版 `名称:提示词` 预设仍可正常读取。
-- **限制与审核**：会话黑名单、管理员/白名单绕过、频率限制、每日额度、参考图大小限制；支持屏蔽词与 AI 提示词/图片审核。
+- **限制与审核**：会话黑名单、管理员/白名单绕过、会话频率限制、群聊与个人双层每日额度、参考图大小限制；支持屏蔽词与 AI 提示词/图片审核。
 - **插件间公共 API**：其他插件可提交任务、查询状态、取消任务、等待结果并获取本地图片路径。
+
+## 群聊与个人每日额度
+
+在“使用限制”中可独立启用“群聊每日额度”和“个人每日额度”。例如群聊 `30` 张、个人 `3` 张：同群每人各有 3 张，同时全群合计不能超过 30 张；同一用户在不同群独立统计。启用两层时必须同时满足，按请求数量预留，按实际保存图片数量结算。
+
+旧版每日额度和已有 UMO 用量自动继承为群聊额度，新增个人额度默认关闭。为避免升级后私聊无限制，开启群聊额度也保留私聊的旧会话限额；私聊可同时受个人额度限制。两项均关闭才是不设每日额度。管理员和 UMO 白名单仍绕过限制并记录用量。
+
+公共 API 的用户请求应传 `sender_id=event.get_sender_id()`；仅传 UMO 的旧调用继续按会话限额处理，不会虚构个人身份。详见[配置说明](docs/configuration.md#使用限制配置)和[公共 API 文档](docs/public-api.md#调用身份与额度)。
 
 ## 命令
 
@@ -85,3 +93,7 @@ npm run build
 ```
 
 页面运行在 sandbox iframe 中，所有请求都必须经 `window.AstrBotPluginView`（见 `frontend/src/bridge.js`）；主题色从 `frontend/src/theme/index.js` 复制自 AstrBot 主站，主站主题变更后需要同步。图标使用 `@mdi/js`，模板中必须写成 `$alias` 形式（如 `icon="$refresh"`），可用别名见 `frontend/src/theme/index.js`。
+
+### 离线额度测试
+
+安装 `requirements.txt` 与 `pytest` 后执行 `python -m pytest tests -q`。测试 mock AstrBot 和模型结果，直接运行插件的真实额度、任务、命令、LLM 工具与公共 API 代码，不连接生图服务。基础静态检查可执行 `ruff check --isolated --select E4,E7,E9,F,I main.py core tests`。

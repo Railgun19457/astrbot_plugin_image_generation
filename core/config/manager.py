@@ -98,6 +98,7 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
 
     def load(self) -> PluginConfig:
         """Load and parse plugin configuration."""
+        self._migrate_daily_limits()
         self._validate_config_values()
 
         gen_cfg = self._get_config_section("generation")
@@ -151,6 +152,31 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
 
         return self._plugin_config
 
+    def _migrate_daily_limits(self) -> None:
+        """Copy the legacy session limit once, before schema normalization.
+
+        AstrBot inserts schema defaults before constructing the plugin, so a
+        missing-key fallback alone cannot recognize upgraded configurations.
+        Keep the legacy fields unchanged for rollback.
+        """
+        cfg = self._get_config_section("user_limits")
+        if self._get_bool(cfg, "daily_limits_migrated", False):
+            return
+        legacy_enabled = self._get_bool(cfg, "enable_daily_limit", False)
+        if legacy_enabled:
+            cfg["enable_group_daily_limit"] = True
+        if (
+            legacy_enabled
+            or cfg.get("group_daily_limit_count", DEFAULT_DAILY_LIMIT_COUNT)
+            == DEFAULT_DAILY_LIMIT_COUNT
+        ):
+            cfg["group_daily_limit_count"] = self._get_int(
+                cfg, "daily_limit_count", DEFAULT_DAILY_LIMIT_COUNT, min_value=1
+            )
+        cfg["daily_limits_migrated"] = True
+        self._config["user_limits"] = cfg
+        self._config.save_config()
+
     def _parse_usage_settings(self, cfg: dict[str, Any]) -> UsageSettings:
         """Parse user limit settings from normalized config."""
         return UsageSettings(
@@ -166,6 +192,18 @@ class ConfigManager(ConfigProviderParserMixin, ConfigTemplateStoreMixin):
                 "daily_limit_count",
                 DEFAULT_DAILY_LIMIT_COUNT,
                 min_value=1,
+            ),
+            enable_group_daily_limit=self._get_bool(
+                cfg, "enable_group_daily_limit", False
+            ),
+            group_daily_limit_count=self._get_int(
+                cfg, "group_daily_limit_count", DEFAULT_DAILY_LIMIT_COUNT, min_value=1
+            ),
+            enable_user_daily_limit=self._get_bool(
+                cfg, "enable_user_daily_limit", False
+            ),
+            user_daily_limit_count=self._get_int(
+                cfg, "user_daily_limit_count", DEFAULT_DAILY_LIMIT_COUNT, min_value=1
             ),
             max_image_size_mb=self._get_int(
                 cfg,
