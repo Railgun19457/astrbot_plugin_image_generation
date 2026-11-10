@@ -31,10 +31,13 @@ class GenerationTaskStore:
         """
         self._persistence_file = Path(persistence_file) if persistence_file else None
 
-    @property
-    def has_history_file(self) -> bool:
-        """Return whether a persisted history file currently exists."""
-        return bool(self._persistence_file and self._persistence_file.exists())
+    def clear(self) -> None:
+        """Remove a recovery file after its records have been saved or settled."""
+        if self._persistence_file:
+            try:
+                self._persistence_file.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("%s 清理生图额度恢复文件失败", LOG, exc_info=True)
 
     def load(self) -> list[GenerationTaskRecord]:
         """Load persisted generation task history from disk.
@@ -107,6 +110,7 @@ class GenerationTaskStore:
                     temp_file.unlink()
             except Exception:
                 pass
+            raise
 
     def record_to_dict(self, record: GenerationTaskRecord) -> dict[str, Any]:
         """Convert a generation task record to JSON-safe metadata.
@@ -149,6 +153,12 @@ class GenerationTaskStore:
                 for item in sorted(record.items.values(), key=lambda item: item.index)
             ],
             "usage_scope": record.usage_scope,
+            "quota_version": record.quota_version,
+            "sender_id": record.sender_id,
+            "quota_caller_type": record.quota_caller_type,
+            "quota_scopes": dict(record.quota_scopes),
+            "quota_exempt": record.quota_exempt,
+            "quota_usage_summary": record.quota_usage_summary,
             "reserved_count": record.reserved_count,
             "quota_date": record.quota_date,
             "is_usage_limit_admin": record.is_usage_limit_admin,
@@ -244,6 +254,20 @@ class GenerationTaskStore:
                 requested_count,
             ),
             usage_scope=str(raw_record.get("usage_scope") or ""),
+            quota_version=self._safe_int(raw_record.get("quota_version"), 1, 1),
+            sender_id=str(raw_record.get("sender_id") or ""),
+            quota_caller_type=str(raw_record.get("quota_caller_type") or "legacy"),
+            quota_scopes={
+                str(k): str(v)
+                for k, v in (raw_record.get("quota_scopes") or {}).items()
+                if k in {"group", "private", "session", "user"}
+                and isinstance(v, str)
+                and v
+            }
+            if isinstance(raw_record.get("quota_scopes", {}), dict)
+            else {},
+            quota_exempt=bool(raw_record.get("quota_exempt", False)),
+            quota_usage_summary=str(raw_record.get("quota_usage_summary") or ""),
             reserved_count=self._safe_int(raw_record.get("reserved_count"), 0, 0),
             quota_date=str(raw_record.get("quota_date") or "").strip(),
             is_usage_limit_admin=bool(raw_record.get("is_usage_limit_admin", False)),

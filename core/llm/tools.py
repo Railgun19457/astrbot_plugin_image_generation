@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from typing import Any
@@ -25,7 +24,7 @@ from ..config.templates import (
 from ..config.templates import (
     normalize_name_items as _normalize_name_items,
 )
-from ..generation.options import is_explicit_size
+from ..generation.options import is_explicit_size, split_gif_prompt_option
 from ..generation.reference_collector import (
     ContextReferenceImageNotFoundError,
     collect_tool_reference_images,
@@ -83,6 +82,7 @@ async def _start_generation_task(
     plugin: Any,
     event: Any,
     *,
+    gif_requested: bool = False,
     prompt: str,
     aspect_ratio: str,
     resolution: str,
@@ -117,6 +117,9 @@ async def _start_generation_task(
         event.unified_msg_origin,
         is_admin=is_usage_limit_admin,
         requested_count=image_count,
+        sender_id=event.get_sender_id(),
+        message_type=event.get_message_type(),
+        group_id=event.get_group_id(),
     )
     if isinstance(check_result, str):
         if check_result:
@@ -134,18 +137,6 @@ async def _start_generation_task(
     if rejection := plugin.task_manager.get_generation_queue_rejection():
         code, message = rejection
         return f"❌ 生图任务提交失败: {message} ({code})"
-
-    check_result = plugin.usage_manager.check_rate_limit(
-        event.unified_msg_origin,
-        is_admin=is_usage_limit_admin,
-        requested_count=image_count,
-    )
-    if isinstance(check_result, str):
-        if check_result:
-            masked_uid = mask_sensitive(event.unified_msg_origin)
-            logger.info(f"{LOG} 工具调用触发限制: {check_result} (用户: {masked_uid})")
-        return check_result
-    task_created = False
 
     task_id = new_task_id()
     try:
@@ -190,42 +181,13 @@ async def _start_generation_task(
             presets=presets,
             personas=personas,
             source_event=event,
+            gif_requested=gif_requested,
         )
-        task_created = True
-    except asyncio.CancelledError:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
-        raise
     except GenerationTaskCreationError as exc:
         return f"❌ 生图任务提交失败: {exc.message} ({exc.code})"
     except ContextReferenceImageNotFoundError:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
         return "❌ 未找到可用的聊天图片，已取消改图任务；请重新发送或引用图片后再试"
     except Exception as exc:
-        if not task_created:
-            record = plugin.task_manager.get_generation_task(task_id)
-            if record and record.quota_date:
-                plugin.usage_manager.release_reserved_usage(
-                    event.unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=record.quota_date,
-                )
         logger.error(
             f"{log_prefix('LLMTool', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
             exc_info=True,
@@ -263,7 +225,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "生图时使用的额外提示词。设置 preset 或 persona 时可留空。",
+                    "description": "生图时使用的额外提示词。仅在用户明确要求 GIF 动图时，在提示词末尾加空格和 gif。设置 preset 或 persona 时可留空。",
                 },
                 "preset": {
                     "type": "string",
@@ -320,7 +282,8 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
         if not plugin:
             return "❌ 插件未正确初始化 (Plugin instance missing)"
 
-        prompt = str(kwargs.get("prompt", "") or "").strip()
+        prompt, gif_requested = split_gif_prompt_option(kwargs.get("prompt", ""))
+        prompt = prompt.strip()
         raw_aspect_ratio = kwargs.get("aspect_ratio")
         raw_resolution = kwargs.get("resolution")
         aspect_ratio = raw_aspect_ratio or plugin.config_manager.default_aspect_ratio
@@ -443,6 +406,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             plugin,
             event,
             prompt=prompt,
+            gif_requested=gif_requested,
             aspect_ratio=str(aspect_ratio),
             resolution=str(resolution),
             reference_images=reference_images,

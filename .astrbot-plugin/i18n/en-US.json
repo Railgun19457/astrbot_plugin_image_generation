@@ -306,6 +306,14 @@
               "gif"
             ]
           },
+          "auto_gif": {
+            "description": "Detect GIF from the prompt",
+            "hint": "When enabled, use gif as a separate, case-insensitive option to request an animated GIF. Requires GIF support for the model and account."
+          },
+          "send_gif_storyboard": {
+            "description": "Send the GIF storyboard",
+            "hint": "Include a static storyboard if the provider returns one with the animation. The storyboard does not count toward the requested image count or daily quota."
+          },
           "frame_count": {
             "description": "GIF frame count",
             "hint": "GIF only: 2–16 frames. Frame count and dimensions must fit the model's pixel budget."
@@ -925,7 +933,7 @@
     },
     "user_limits": {
       "description": "Usage limits",
-      "hint": "Configure session blacklist, user rate limits, daily quota, and reference image size limits.",
+      "hint": "Configure session blacklists, conversation rate limits, group and user daily quotas, and reference image size limits.",
       "umo_blacklist": {
         "description": "Session UMO blacklist",
         "hint": "Enter unified_msg_origin (UMO) values. Matching sessions cannot use image generation."
@@ -944,7 +952,7 @@
       },
       "rate_limit_seconds": {
         "description": "Rate limit (seconds)",
-        "hint": "Minimum interval between two requests from the same user. Set to 0 to disable rate limiting."
+        "hint": "Minimum interval between requests in the same UMO conversation (shared by group members). Set 0 to disable."
       },
       "max_image_size_mb": {
         "description": "Maximum reference image size (MB)",
@@ -952,11 +960,31 @@
       },
       "enable_daily_limit": {
         "description": "Enable daily quota",
-        "hint": "When enabled, limit how many images each user can generate per day."
+        "hint": "Legacy conversation quota; migrated once to the group daily quota."
       },
       "daily_limit_count": {
         "description": "Daily quota",
-        "hint": "Maximum number of images each user can generate per day."
+        "hint": "Legacy quota count retained for configuration compatibility."
+      },
+      "enable_group_daily_limit": {
+        "description": "Enable group daily quota",
+        "hint": "Shared by the group; retains legacy conversation limits in private chats."
+      },
+      "group_daily_limit_count": {
+        "description": "Group daily quota",
+        "hint": "Maximum images per day for this group quota. Both enabled quotas must pass."
+      },
+      "enable_user_daily_limit": {
+        "description": "Enable user daily quota",
+        "hint": "Per sender, with separate quotas per conversation by default."
+      },
+      "share_user_daily_limit_across_sessions": {
+        "description": "Share user daily quota across conversations",
+        "hint": "Applies when user daily quotas are enabled. A sender shares one quota across groups, channels, and direct messages within the same adapter instance."
+      },
+      "user_daily_limit_count": {
+        "description": "User daily quota",
+        "hint": "Maximum images per day for this user quota. Both enabled quotas must pass."
       }
     },
     "safety_audit": {
@@ -1102,7 +1130,7 @@
       "hint": "Configure whether generation task history is persisted, and set history count and retention days.",
       "enable_generation_task_history": {
         "description": "Persist generation task history",
-        "hint": "When enabled, task status, session identifier, prompt summary, result paths, and error summary are saved in the plugin data directory. When disabled, tasks are kept only in runtime memory."
+        "hint": "Disabling this keeps existing history and stops saving new history entries. Minimal records for unsettled quotas are stored separately."
       },
       "generation_task_history_limit": {
         "description": "Generation task history limit",

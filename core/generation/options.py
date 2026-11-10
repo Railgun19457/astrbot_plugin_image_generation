@@ -1,4 +1,4 @@
-"""Extract explicit size options from command text without interpreting prose."""
+"""Extract explicit generation options without interpreting prose."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ class GenerationOptions(NamedTuple):
     aspect_ratio: str | None = None
     resolution: str | None = None
     error: str | None = None
+    gif_requested: bool = False
 
 
 _KEY = r"宽高比|比例|画幅|分辨率"
@@ -36,8 +37,26 @@ _FORWARD = re.compile(
     rf"(?:\s*(?:为|是|[:：=])\s*|\s+|(?=[0-9]|不指定))"
     rf"(?P<value>{_VALUE})?"
 )
-_SUFFIX = re.compile(r"(?<!\S)(?P<value>\d+\s*[:：]\s*\d+|\d+(?:\.\d+)?\s*[kK])\s*$")
+_GIF_TOKEN = r"(?i:gif|ｇｉｆ)"
+_LEADING_GIF_OPTION = re.compile(rf"^\s*{_GIF_TOKEN}(?=\s|$)")
+_GIF_SUFFIX = re.compile(rf"(?<!\S){_GIF_TOKEN}\s*$")
+_SUFFIX = re.compile(
+    rf"(?<!\S)(?P<value>(?P<gif>{_GIF_TOKEN})|\d+\s*[:：]\s*\d+|\d+(?:\.\d+)?\s*[kK])\s*$"
+)
 _SEPARATORS = " \t\r\n，,；;、。"
+
+
+def split_gif_prompt_option(prompt: str) -> tuple[str, bool]:
+    """Remove a leading or trailing GIF option before adding other prompt text."""
+    text = str(prompt or "")
+    gif_requested = False
+    if leading := _LEADING_GIF_OPTION.match(text):
+        text = text[leading.end() :].lstrip()
+        gif_requested = True
+    if trailing := _GIF_SUFFIX.search(text):
+        text = text[: trailing.start()].rstrip()
+        gif_requested = True
+    return text, gif_requested
 
 
 def _is_cjk_letter(char: str) -> bool:
@@ -129,17 +148,20 @@ def parse_generation_options(prompt: str) -> GenerationOptions:
             key_start, key_end = match.span("key")
             if not _is_standalone_key(prompt, key_start, key_end):
                 continue
+            value = match["value"] or ""
+            if pattern is _REVERSE and re.fullmatch(_GIF_TOKEN, value):
+                continue
             start, end = match.span()
             key = "resolution" if match["key"] == "分辨率" else "aspect_ratio"
-            candidates.append((start, end, key, match["value"] or ""))
+            candidates.append((start, end, key, value))
     # Resolve in text order so adjacent forward clauses do not become a reverse
     # phrase: "比例 16:9 分辨率 2K" must not consume "16:9 分辨率".
     for candidate in sorted(candidates):
         if not matches or candidate[0] >= matches[-1][1]:
             matches.append(candidate)
 
-    # Match only a contiguous suffix of independent numeric size tokens. Do not
-    # scan isolated values in the body, or across an explicit parameter clause.
+    # Match only a contiguous suffix of independent format and size tokens.
+    # Do not scan isolated values in the body or across a size clause.
     suffix_end = len(prompt)
     while match := _SUFFIX.search(prompt[:suffix_end]):
         start, end = match.span()
@@ -149,19 +171,27 @@ def parse_generation_options(prompt: str) -> GenerationOptions:
         ):
             break
         value = match["value"]
-        key = "aspect_ratio" if ":" in value or "：" in value else "resolution"
-        normalized = re.sub(r"\s+", "", value).replace("：", ":").upper()
-        supported = (
-            SUPPORTED_RESOLUTIONS if key == "resolution" else SUPPORTED_ASPECT_RATIOS
-        )
-        # Unknown trailing shorthand such as "8K" stays in the prompt.
-        if normalized not in supported:
-            break
+        key = "gif"
+        if not match["gif"]:
+            key = "aspect_ratio" if ":" in value or "：" in value else "resolution"
+            normalized = re.sub(r"\s+", "", value).replace("：", ":").upper()
+            supported = (
+                SUPPORTED_RESOLUTIONS
+                if key == "resolution"
+                else SUPPORTED_ASPECT_RATIOS
+            )
+            # Unknown trailing shorthand such as "8K" stays in the prompt.
+            if normalized not in supported:
+                break
         matches.append((start, end, key, value))
         suffix_end = start
 
     values: dict[str, str] = {}
+    gif_requested = False
     for _start, _end, key, raw in sorted(matches):
+        if key == "gif":
+            gif_requested = True
+            continue
         value = re.sub(r"\s+", "", raw).replace("：", ":").upper()
         supported = (
             SUPPORTED_RESOLUTIONS if key == "resolution" else SUPPORTED_ASPECT_RATIOS
@@ -179,8 +209,15 @@ def parse_generation_options(prompt: str) -> GenerationOptions:
             )
         values[key] = value
 
+    cleaned_prompt = _clean_spans(
+        prompt, [(start, end) for start, end, _, _ in matches]
+    )
+    # An explicit size clause at the end can hide a GIF option immediately
+    # before it. Check the remaining prompt after removing the size clauses.
+    cleaned_prompt, remaining_gif = split_gif_prompt_option(cleaned_prompt)
     return GenerationOptions(
-        _clean_spans(prompt, [(start, end) for start, end, _, _ in matches]),
+        cleaned_prompt,
         values.get("aspect_ratio"),
         values.get("resolution"),
+        gif_requested=gif_requested or remaining_gif,
     )

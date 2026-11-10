@@ -1,6 +1,16 @@
 ### 更新日志
-- **v1.8.5-2026-11-07** ([#75](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/75))
-  - OpenAI Images API 新增 GIF 动图输出：文生图与图生图共用输出参数，支持 `frame_count`（2～16）、`frame_duration_ms`（20～2000 毫秒）和独立 `gif_size`（默认 auto）；GIF 自动禁用 SSE，非法帧参数或尺寸在发请求前拒绝。
+- **v1.8.6-2026-11-10**
+  - **群聊额度和个人额度可分别启用**。群额度按实际群或频道统计，开启 AstrBot「隔离对话」后仍在群内共享。两层同时启用时，请求必须同时满足两层上限。启用用量展示后，结果会分别显示各层用量，豁免请求显示为 `n/∞`。 ([#74](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/74))
+  - **个人额度默认关闭**，启用后默认按会话和真实发送者统计。开启「个人每日额度跨会话共享」后，同一适配器实例内的同一用户在各群、频道和私聊共用一份额度，当日已有用量和预留也会合计。 ([#76](https://github.com/Railgun19457/astrbot_plugin_image_generation/issues/76))
+  - 升级时继承旧会话额度配置和可识别的历史用量，私聊继续使用原有会话限额。公共 API 可传入 `sender_id`、`group_id` 和 `caller_type`，仅传 UMO 的旧调用仍可用。LLM 唤醒后继续使用原发送者身份。
+  - 命令、LLM 工具和公共 API **共用额度检查与预留**，防止并发超额。额度按提交日期和实际保存的主图结算，任务失败、取消或重启时释放剩余预留，重复回调只扣一次。写入失败时仍释放未使用的预留，已生成的用量由后台重试入账。
+  - **关闭任务历史持久化**时保留已有记录，重新开启即可查看。未结算任务单独保存最小恢复记录。
+  - **OpenAI 支持空格分隔的 `gif` 参数**。开启「自动识别 GIF」后，可用 `/生图 小猫摇尾巴 gif 3` 请求动图，`gif` 大小写均可。 ([#77](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/77))
+  - **GIF 分镜**默认随动图投递。供应商附带分镜时，每次成功请求最多保存一张，分镜不占生成张数和每日额度。GIF 请求跳过损坏的响应条目并校验多帧动图，成功响应中没有有效动图时直接报错，避免重复生成。
+  - 统一图片格式检测和额度结算入口，清理未使用的内部方法。
+
+- **v1.8.5-2026-11-07**
+  - OpenAI Images API 新增 GIF 动图输出：文生图与图生图共用输出参数，支持 `frame_count`（2～16）、`frame_duration_ms`（20～2000 毫秒）和独立 `gif_size`（默认 auto）；GIF 自动禁用 SSE，非法帧参数或尺寸在发请求前拒绝。([#75](https://github.com/Railgun19457/astrbot_plugin_image_generation/pull/75))
   - 修复 OpenAI 图生图未发送 `output_format` 的问题；新增 GPT Image 2.6 Sunburst / Flare 模型选项和中英文配置提示，保留原有默认模型与 PNG 输出。
   - GIF 持久化与投递沿用已有无转码流程，保留原始动图字节。
 

@@ -30,7 +30,11 @@ from .core.config.templates import format_template_summary
 from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
 from .core.generation.image_processor import ImageProcessor
-from .core.generation.options import is_explicit_size, parse_generation_options
+from .core.generation.options import (
+    is_explicit_size,
+    parse_generation_options,
+    split_gif_prompt_option,
+)
 from .core.generation.quoted_text import collect_quoted_text, has_quoted_text_source
 from .core.generation.reference_collector import collect_command_reference_images
 from .core.llm.result_handler import LLMResultHandler
@@ -54,7 +58,6 @@ from .core.tasks.manager import TaskManager
 from .core.tasks.models import (
     GenerationTaskCreationError,
     GenerationTaskRecord,
-    GenerationTaskStatus,
 )
 from .core.tasks.usage import UsageManager
 
@@ -160,6 +163,10 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             logger.error(f"{LOG} 适配器配置加载失败，插件未初始化")
 
         self.task_manager.load_generation_history(self.usage_manager)
+        self.task_manager.create_task(
+            self.generation_executor.retry_quota_settlements(),
+            name="image_generation_quota_retry",
+        )
         self.task_manager.configure_generation_queue(
             max_queued_generation_tasks=self.config_manager.max_queued_generation_tasks
         )
@@ -368,7 +375,11 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         presets: list[str] | None = None,
         personas: list[str] | None = None,
         source_event: AstrMessageEvent | None = None,
+        sender_id: str | None = None,
+        group_id: str | None = None,
+        caller_type: str = "auto",
         auto_send: bool = True,
+        gif_requested: bool = False,
     ) -> GenerationTaskRecord:
         """Create and track an image generation task in the unified task manager."""
         if preset is None:
@@ -377,13 +388,51 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 personas or [],
             )
         image_count = self.normalize_image_count(image_count)
-        quota_date = ""
-        if unified_msg_origin and image_count > 0:
-            quota_date = self.usage_manager.reserve_usage(
-                unified_msg_origin,
-                image_count,
-                is_admin=is_usage_limit_admin,
+        message_type = None
+        if source_event is not None:
+            if source_event.unified_msg_origin != unified_msg_origin:
+                raise GenerationTaskCreationError(
+                    "invalid_identity", "发送者事件与任务会话不一致"
+                )
+            sender_id = source_event.get_sender_id()
+            message_type = source_event.get_message_type()
+            group_id = source_event.get_group_id()
+            caller_type = (
+                "user"
+                if sender_id
+                or self.config_manager.usage_settings.enable_user_daily_limit
+                else "legacy"
             )
+        sender_id = str(sender_id or "").strip()
+        if caller_type == "auto":
+            caller_type = (
+                "user" if sender_id else ("legacy" if unified_msg_origin else "system")
+            )
+        if caller_type not in {"user", "system", "legacy"}:
+            raise GenerationTaskCreationError("invalid_identity", "无效的调用身份类型")
+        if sender_id and not unified_msg_origin:
+            raise GenerationTaskCreationError(
+                "invalid_identity", "个人额度需要真实发送者及会话 UMO"
+            )
+        if caller_type == "system" and sender_id:
+            raise GenerationTaskCreationError(
+                "invalid_identity", "系统调用不能携带用户身份"
+            )
+        if caller_type == "user" and not sender_id:
+            raise GenerationTaskCreationError(
+                "invalid_identity", "用户调用缺少真实发送者 ID"
+            )
+        if sender_id:
+            caller_type = "user"
+        quota_date, quota_scopes, quota_exempt = self.usage_manager.reserve_task(
+            task_id,
+            unified_msg_origin,
+            image_count,
+            sender_id=sender_id,
+            message_type=message_type,
+            group_id=str(group_id or "").strip(),
+            is_admin=is_usage_limit_admin,
+        )
 
         def _generation_coro_factory():
             return self.generation_executor.generate_and_send_image_async(
@@ -397,6 +446,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 is_usage_limit_admin=is_usage_limit_admin,
                 deliver_via_ai=source == "LLM工具",
                 auto_send=auto_send,
+                gif_requested=gif_requested,
             )
 
         try:
@@ -420,19 +470,18 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 preset=preset,
                 preset_label=preset_label,
                 usage_scope=unified_msg_origin,
-                reserved_count=image_count if quota_date else 0,
+                quota_version=3,
+                sender_id=sender_id,
+                quota_caller_type=caller_type,
+                quota_scopes=quota_scopes,
+                quota_exempt=quota_exempt,
+                reserved_count=image_count if quota_scopes and not quota_exempt else 0,
                 quota_date=quota_date,
                 is_usage_limit_admin=is_usage_limit_admin,
                 terminal_callback=self._handle_generation_task_terminal,
             )
-        except GenerationTaskCreationError:
-            if quota_date:
-                self.usage_manager.release_reserved_usage(
-                    unified_msg_origin,
-                    is_admin=is_usage_limit_admin,
-                    count=image_count,
-                    quota_date=quota_date,
-                )
+        except BaseException:
+            self.usage_manager.rollback_task(task_id)
             raise
         # Start the cooldown window only after the task is actually accepted.
         self.usage_manager.record_request_timestamp(
@@ -440,10 +489,12 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             is_admin=is_usage_limit_admin,
         )
         if source == "LLM工具":
-            self.llm_result_handler.attach_task_wakeup(
-                record,
-                source_event=source_event,
-            )
+            try:
+                self.llm_result_handler.attach_task_wakeup(
+                    record, source_event=source_event
+                )
+            except Exception:
+                logger.error(f"{LOG} 注册生图结果唤醒失败", exc_info=True)
         return record
 
     def _handle_generation_task_terminal(self, record: GenerationTaskRecord) -> None:
@@ -452,19 +503,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         Args:
             record: Terminal generation task record.
         """
-        if not record.usage_scope or record.quota_released or record.quota_settled:
-            return
-        if record.status == GenerationTaskStatus.SUCCEEDED:
-            self.generation_executor.settle_generation_task_quota_once(
-                record.task_id,
-                actual_count=record.result_count,
-            )
-            return
-        if record.status in {
-            GenerationTaskStatus.FAILED,
-            GenerationTaskStatus.CANCELLED,
-        }:
-            self.generation_executor.release_generation_task_quota_once(record.task_id)
+        self.generation_executor.settle_generation_task_quota_once(record.task_id)
 
     # Command handlers.
 
@@ -574,7 +613,8 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             yield event.plain_result("❌ 生图生成器未初始化")
             return
 
-        image_count, prompt = self._parse_command_image_count(raw_prompt)
+        prompt, gif_requested = split_gif_prompt_option(raw_prompt)
+        image_count, prompt = self._parse_command_image_count(prompt)
         options = parse_generation_options(prompt)
         if options.error:
             yield event.plain_result(f"❌ {options.error}")
@@ -625,6 +665,9 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             user_id,
             is_admin=is_usage_limit_admin,
             requested_count=image_count,
+            sender_id=event.get_sender_id(),
+            message_type=event.get_message_type(),
+            group_id=event.get_group_id(),
         )
         if isinstance(check_result, str):
             if check_result:
@@ -646,17 +689,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             yield event.plain_result(f"❌ 生图任务提交失败: {message}")
             return
 
-        check_result = self.usage_manager.check_rate_limit(
-            user_id,
-            is_admin=is_usage_limit_admin,
-            requested_count=image_count,
-        )
-        if isinstance(check_result, str):
-            if check_result:
-                yield event.plain_result(check_result)
-            return
-        task_created = False
-
         task_id = new_task_id()
         try:
             images_data: list[ImageData] | None = None
@@ -671,8 +703,6 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                         template_images,
                         task_id=task_id,
                     )
-                except asyncio.CancelledError:
-                    raise
                 except Exception as exc:
                     logger.error(
                         f"{log_prefix('Task', task_id)} 参考图准备失败: {safe_log_text(exc, 200)}",
@@ -696,32 +726,13 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 preset_label=preset_label,
                 presets=matched_presets,
                 personas=matched_personas,
+                source_event=event,
+                gif_requested=gif_requested or options.gif_requested,
             )
-            task_created = True
-        except asyncio.CancelledError:
-            if not task_created:
-                record = self.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    self.usage_manager.release_reserved_usage(
-                        user_id,
-                        is_admin=is_usage_limit_admin,
-                        count=image_count,
-                        quota_date=record.quota_date,
-                    )
-            raise
         except GenerationTaskCreationError as exc:
             yield event.plain_result(f"❌ 生图任务提交失败: {exc.message}")
             return
         except Exception as exc:
-            if not task_created:
-                record = self.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    self.usage_manager.release_reserved_usage(
-                        user_id,
-                        is_admin=is_usage_limit_admin,
-                        count=image_count,
-                        quota_date=record.quota_date,
-                    )
             logger.error(
                 f"{log_prefix('Task', task_id)} 生图任务提交前处理失败: {safe_log_error_body(exc, 200)}",
                 exc_info=True,

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from astrbot.api import logger
@@ -14,7 +13,7 @@ from ..config.templates import (
     normalize_name_items,
     resolve_named_templates,
 )
-from ..generation.options import is_explicit_size
+from ..generation.options import is_explicit_size, split_gif_prompt_option
 from ..generation.reference_collector import (
     collect_reference_images_from_templates,
     deduplicate_reference_images,
@@ -42,6 +41,7 @@ LOG = log_prefix("PublicAPI")
 DEFAULT_SOURCE = "公共接口"
 DEFAULT_WAIT_POLL_INTERVAL_SECONDS = 0.5
 TASK_CREATION_ERROR_CODES = {
+    "rate_limited": PublicAPIResultCode.RATE_LIMITED,
     PublicAPIResultCode.QUEUE_FULL.value: PublicAPIResultCode.QUEUE_FULL,
     PublicAPIResultCode.TASK_MANAGER_CLOSED.value: PublicAPIResultCode.TASK_MANAGER_CLOSED,
     PublicAPIResultCode.TASK_ID_CONFLICT.value: PublicAPIResultCode.TASK_ID_CONFLICT,
@@ -68,6 +68,9 @@ class ImageGenerationPublicAPI:
         presets: str | list[str] | None = None,
         personas: str | list[str] | None = None,
         is_admin: bool = False,
+        sender_id: str | None = None,
+        group_id: str | None = None,
+        caller_type: str = "auto",
     ) -> ImageGenerationSubmitResult:
         """Submit a background image generation task and return its task id."""
         plugin = self._plugin
@@ -96,6 +99,7 @@ class ImageGenerationPublicAPI:
         )
         final_aspect_ratio = aspect_ratio or plugin.config_manager.default_aspect_ratio
         final_resolution = resolution or plugin.config_manager.default_resolution
+        prompt, gif_requested = split_gif_prompt_option(prompt)
 
         (
             final_prompt,
@@ -134,6 +138,8 @@ class ImageGenerationPublicAPI:
                 scope,
                 is_admin=safe_is_admin,
                 requested_count=requested_count,
+                sender_id=str(sender_id or "").strip(),
+                group_id=str(group_id or "").strip(),
             )
             if isinstance(check_result, str):
                 logger.info(
@@ -169,28 +175,6 @@ class ImageGenerationPublicAPI:
                 error=code,
             )
 
-        if use_usage_scope:
-            check_result = plugin.usage_manager.check_rate_limit(
-                scope,
-                is_admin=safe_is_admin,
-                requested_count=requested_count,
-            )
-            if isinstance(check_result, str):
-                logger.info(
-                    f"{LOG} "
-                    + format_log_event(
-                        "公共接口使用限制",
-                        调用方=request_source,
-                        用户=mask_sensitive(scope),
-                        原因=safe_log_text(check_result),
-                    )
-                )
-                return self._submit_error(
-                    PublicAPIResultCode.RATE_LIMITED,
-                    check_result,
-                )
-
-        task_created = False
         try:
             references = await self._collect_reference_images(
                 reference_image_sources=reference_image_sources,
@@ -210,18 +194,21 @@ class ImageGenerationPublicAPI:
                 source=request_source,
                 prompt=final_prompt,
                 images_data=references,
+                gif_requested=gif_requested,
                 unified_msg_origin=scope,
                 aspect_ratio=str(final_aspect_ratio),
                 resolution=str(final_resolution),
                 image_count=requested_count,
                 is_usage_limit_admin=safe_is_admin,
+                sender_id=sender_id,
+                group_id=group_id,
+                caller_type=caller_type,
                 preset=preset_summary,
                 preset_label=preset_label,
                 presets=matched_presets,
                 personas=matched_personas,
                 auto_send=False,
             )
-            task_created = True
             logger.debug(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(
@@ -239,27 +226,7 @@ class ImageGenerationPublicAPI:
                 exc.message,
                 error=exc.code,
             )
-        except asyncio.CancelledError:
-            if not task_created:
-                record = plugin.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    plugin.usage_manager.release_reserved_usage(
-                        scope,
-                        is_admin=safe_is_admin,
-                        count=requested_count,
-                        quota_date=record.quota_date,
-                    )
-            raise
         except Exception as exc:
-            if not task_created:
-                record = plugin.task_manager.get_generation_task(task_id)
-                if record and record.quota_date:
-                    plugin.usage_manager.release_reserved_usage(
-                        scope,
-                        is_admin=safe_is_admin,
-                        count=requested_count,
-                        quota_date=record.quota_date,
-                    )
             logger.error(
                 f"{log_prefix('PublicAPI', task_id)} "
                 + format_log_event(
@@ -415,6 +382,9 @@ class ImageGenerationPublicAPI:
         presets: str | list[str] | None = None,
         personas: str | list[str] | None = None,
         is_admin: bool = False,
+        sender_id: str | None = None,
+        group_id: str | None = None,
+        caller_type: str = "auto",
         timeout_seconds: float | None = None,
         poll_interval_seconds: float = DEFAULT_WAIT_POLL_INTERVAL_SECONDS,
     ) -> ImageGenerationResult:
@@ -431,6 +401,9 @@ class ImageGenerationPublicAPI:
             presets=presets,
             personas=personas,
             is_admin=is_admin,
+            sender_id=sender_id,
+            group_id=group_id,
+            caller_type=caller_type,
         )
         if not submit_result.ok or not submit_result.task_id:
             return ImageGenerationResult(

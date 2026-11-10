@@ -301,6 +301,18 @@
             ],
             "default": "png"
           },
+          "auto_gif": {
+            "description": "自动识别 GIF",
+            "hint": "开启后，可用空格分隔的 gif 参数请求动图，例如 /生图 小猫摇尾巴 gif。大小写均可，需要模型和账号支持 GIF。",
+            "type": "bool",
+            "default": false
+          },
+          "send_gif_storyboard": {
+            "description": "发送 GIF 分镜",
+            "hint": "部分供应商会附带静态分镜。开启时随动图返回分镜，分镜不占生成张数和每日额度。",
+            "type": "bool",
+            "default": true
+          },
           "frame_count": {
             "description": "GIF 帧数",
             "hint": "仅 GIF 输出生效，2～16 帧。帧数与帧尺寸共同受模型像素预算限制。",
@@ -1551,7 +1563,7 @@
   },
   "user_limits": {
     "description": "使用限制",
-    "hint": "配置会话黑名单、用户频率限制、每日额度和参考图大小限制。",
+    "hint": "配置会话黑名单、会话频率限制、群聊和个人每日额度及参考图大小限制。",
     "type": "object",
     "items": {
       "umo_blacklist": {
@@ -1580,7 +1592,7 @@
       },
       "rate_limit_seconds": {
         "description": "速率限制（秒）",
-        "hint": "同一用户两次请求之间的最小间隔；填 0 表示不限制。",
+        "hint": "同一会话 UMO 两次请求之间的最小间隔（群内共享）；填 0 表示不限制。",
         "type": "int",
         "slider": {
           "min": 0,
@@ -1602,13 +1614,61 @@
       },
       "enable_daily_limit": {
         "description": "启用每日额度",
-        "hint": "开启后限制每个用户每日可生成的图片数量。",
+        "hint": "旧版会话额度配置，首次升级自动迁移，保留用于回滚。",
         "type": "bool",
-        "default": false
+        "default": false,
+        "invisible": true
       },
       "daily_limit_count": {
         "description": "每日额度",
-        "hint": "每个用户每日可生成的最大图片数量。",
+        "hint": "旧版会话额度配置，首次升级自动迁移，保留用于回滚。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        "default": 10,
+        "invisible": true
+      },
+      "daily_limits_migrated": {
+        "description": "每日额度已迁移",
+        "type": "bool",
+        "default": false,
+        "invisible": true
+      },
+      "enable_group_daily_limit": {
+        "description": "启用群聊每日额度",
+        "hint": "同群共享；私聊和未知会话保留旧会话额度，避免升级后失去限制。",
+        "type": "bool",
+        "default": false
+      },
+      "group_daily_limit_count": {
+        "description": "群聊每日额度",
+        "hint": "每天最多生成的图片数量；群聊额度与另一层同时启用时均须满足。",
+        "type": "int",
+        "slider": {
+          "min": 1,
+          "max": 100,
+          "step": 1
+        },
+        "default": 10
+      },
+      "enable_user_daily_limit": {
+        "description": "启用个人每日额度",
+        "hint": "按真实发送者统计，默认各会话独立。可开启跨会话共享。",
+        "type": "bool",
+        "default": false
+      },
+      "share_user_daily_limit_across_sessions": {
+        "description": "个人每日额度跨会话共享",
+        "hint": "开启个人每日额度后生效。同一适配器实例内，同一用户在各群、频道和私聊共用一份额度。",
+        "type": "bool",
+        "default": false
+      },
+      "user_daily_limit_count": {
+        "description": "个人每日额度",
+        "hint": "每天最多生成的图片数量；个人额度与另一层同时启用时均须满足。",
         "type": "int",
         "slider": {
           "min": 1,
@@ -1905,7 +1965,7 @@
     "items": {
       "enable_generation_task_history": {
         "description": "持久化生图任务历史",
-        "hint": "开启后会将任务状态、会话标识、提示词摘要、结果路径和错误摘要保存到插件数据目录；关闭后仅保留运行时内存任务。",
+        "hint": "关闭后保留已有历史，停止新增历史记录；未结算额度另存最小恢复记录。",
         "type": "bool",
         "default": true
       },

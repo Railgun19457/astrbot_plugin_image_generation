@@ -206,6 +206,14 @@
               "gif"
             ]
           },
+          "auto_gif": {
+            "description": "自动识别 GIF",
+            "hint": "开启后，可用空格分隔的 gif 参数请求动图，例如 /生图 小猫摇尾巴 gif。大小写均可，需要模型和账号支持 GIF。"
+          },
+          "send_gif_storyboard": {
+            "description": "发送 GIF 分镜",
+            "hint": "部分供应商会附带静态分镜。开启时随动图返回分镜，分镜不占生成张数和每日额度。"
+          },
           "frame_count": {
             "description": "GIF 帧数",
             "hint": "仅 GIF 输出生效，2～16 帧。帧数与帧尺寸共同受模型像素预算限制。"

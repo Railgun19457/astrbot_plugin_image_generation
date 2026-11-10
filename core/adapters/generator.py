@@ -100,6 +100,7 @@ class ImageGenerator:
             batch_index=request.batch_index,
             batch_count=request.batch_count,
             retry_status_callback=request.retry_status_callback,
+            gif_requested=request.gif_requested,
         )
 
     async def generate_preconverted(

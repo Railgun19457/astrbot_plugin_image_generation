@@ -80,6 +80,7 @@ class GenerationRequest:
         repr=False,
         compare=False,
     )
+    gif_requested: bool = False
 
 
 @dataclass
@@ -88,3 +89,4 @@ class GenerationResult:
 
     images: list[bytes] | None = None
     error: str | None = None
+    auxiliary_images: list[bytes] = field(default_factory=list)

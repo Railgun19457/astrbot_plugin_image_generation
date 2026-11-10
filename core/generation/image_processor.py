@@ -29,6 +29,7 @@ from ..shared.logging import (
     safe_log_url,
 )
 from ..shared.types import ImageData
+from .image_utils import detect_mime_type
 
 if TYPE_CHECKING:
     from astrbot.api.event import AstrMessageEvent
@@ -399,31 +400,13 @@ class ImageProcessor:
         log_source: str | None = None,
     ) -> ImageData | None:
         """Validate bytes as a supported image and return normalized image data."""
-        mime = self._detect_mime_type(data)
+        mime = detect_mime_type(data)
         if not self._is_valid_image_data(data, mime):
             logger.warning(
                 f"{LOG} 参考图文件类型不支持或内容不是有效图片: {safe_log_url(log_source or source_url or '<bytes>')}"
             )
             return None
         return ImageData(data=data, mime_type=mime, source_url=source_url)
-
-    def _detect_mime_type(self, data: bytes) -> str:
-        """Detect the image MIME type from magic bytes."""
-        if data.startswith(b"\xff\xd8"):
-            return "image/jpeg"
-        elif data.startswith(b"\x89PNG\r\n\x1a\n"):
-            return "image/png"
-        elif data.startswith((b"GIF87a", b"GIF89a")):
-            return "image/gif"
-        elif data.startswith(b"RIFF") and data[8:12] == b"WEBP":
-            return "image/webp"
-        elif len(data) > 12 and data[4:8] == b"ftyp":
-            brand = data[8:12]
-            if brand in (b"heic", b"heix", b"heim", b"heis"):
-                return "image/heic"
-            if brand in (b"mif1", b"msf1", b"heif"):
-                return "image/heif"
-        return "application/octet-stream"
 
     def _is_valid_image_data(self, data: bytes, mime: str) -> bool:
         """Return whether bytes are a supported, real image payload."""
@@ -636,7 +619,7 @@ class ImageProcessor:
     def save_generated_image(self, task_id: str, img_bytes: bytes) -> str | None:
         """Save generated image bytes to the configured output directory."""
         try:
-            mime = self._detect_mime_type(img_bytes)
+            mime = detect_mime_type(img_bytes)
             extension = GENERATED_IMAGE_EXTENSIONS.get(mime, ".png")
             file_name = f"gen_{task_id}_{int(time.time())}_{hashlib.md5(img_bytes).hexdigest()[:6]}{extension}"
             target_dir = self._generated_dir

@@ -38,6 +38,8 @@ ADAPTER_EXTRA_DEFAULTS: dict[AdapterType, dict[str, Any]] = {
     AdapterType.OPENAI: {
         "enable_streaming": True,
         "output_format": "png",
+        "auto_gif": False,
+        "send_gif_storyboard": True,
         "frame_count": 9,
         "frame_duration_ms": 200,
         "gif_size": "auto",

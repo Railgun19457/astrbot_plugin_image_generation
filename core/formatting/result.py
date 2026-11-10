@@ -321,6 +321,7 @@ def format_image_command_help(config_manager: ConfigManager) -> str:
         "/生图 [预设/人设] [提示词] [数量]",
         "尺寸示例: /生图 猫，比例 16:9，分辨率 2K 3",
         "末尾简写: /生图 猫 16:9 2K 3（数量放最后）",
+        "动图示例: /生图 猫摇尾巴 gif 3（需开启 OpenAI 自动识别 GIF）",
         "尺寸优先级: 本次指定 > 高级预设 > 默认配置",
         "无效或冲突尺寸会提示修改；粘连词和无法识别的末尾简写留在提示词中。",
         "/生图模型 - 查看或切换模型",
@@ -340,6 +341,7 @@ def build_result_info_message(
     duration: float,
     result_count: int,
     task_id: str,
+    quota_record: GenerationTaskRecord | None = None,
 ) -> str:
     """Build the optional metadata appended to generated image messages."""
     info_parts: list[str] = []
@@ -363,16 +365,9 @@ def build_result_info_message(
     if (
         config_manager.should_show_result_info(RESULT_INFO_USAGE)
         and usage_manager.is_daily_limit_enabled()
+        and quota_record
+        and (usage_info := usage_manager.format_usage(quota_record))
     ):
-        count = usage_manager.get_usage_count(unified_msg_origin)
-        daily_limit = (
-            "∞"
-            if usage_manager.is_limit_exempt(
-                unified_msg_origin,
-                is_admin=is_usage_limit_admin,
-            )
-            else str(usage_manager.get_daily_limit())
-        )
-        info_parts.append(f"📅 今日用量: {count}/{daily_limit}")
+        info_parts.append(usage_info)
 
     return "\n".join(info_parts)
