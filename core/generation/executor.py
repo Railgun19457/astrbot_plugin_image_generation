@@ -85,6 +85,7 @@ class GenerationExecutor:
         is_usage_limit_admin: bool = False,
         deliver_via_ai: bool = False,
         auto_send: bool = True,
+        gif_requested: bool = False,
     ) -> None:
         """Generate images and optionally send them to the user.
 
@@ -99,6 +100,7 @@ class GenerationExecutor:
             is_usage_limit_admin: Whether usage limits are bypassed for display.
             deliver_via_ai: Whether results are handed back to the AI tool flow.
             auto_send: Whether to send generated images to the user directly.
+            gif_requested: Whether the original input explicitly requested GIF.
         """
         if not self.generator or not self.generator.adapter:
             if task_id:
@@ -182,6 +184,7 @@ class GenerationExecutor:
                 is_usage_limit_admin,
                 deliver_via_ai,
                 auto_send,
+                gif_requested=gif_requested,
             )
         except Exception:
             self.release_generation_task_quota_once(task_id)
@@ -228,6 +231,8 @@ class GenerationExecutor:
         is_usage_limit_admin: bool,
         deliver_via_ai: bool = False,
         auto_send: bool = True,
+        *,
+        gif_requested: bool = False,
     ) -> None:
         """Execute generation logic and deliver results."""
         start_time = time.time()
@@ -245,7 +250,11 @@ class GenerationExecutor:
 
         converted_images = await self.generator.convert_reference_images(images)
 
-        generated_file_paths, errors = await self._generate_image_requests_concurrently(
+        (
+            generated_file_paths,
+            generated_count,
+            errors,
+        ) = await self._generate_image_requests_concurrently(
             task_id=task_id,
             task_log=task_log,
             prompt=prompt,
@@ -253,6 +262,7 @@ class GenerationExecutor:
             aspect_ratio=aspect_ratio,
             resolution=resolution,
             image_count=image_count,
+            gif_requested=gif_requested,
         )
 
         duration = time.time() - start_time
@@ -272,7 +282,7 @@ class GenerationExecutor:
 
         logger.debug(
             f"{task_log} 生成请求汇总: 耗时={duration:.2f}秒，"
-            f"结果={len(generated_file_paths)}/{image_count}张，失败={len(errors)}项"
+            f"结果={generated_count}/{image_count}张，失败={len(errors)}项"
         )
 
         image_allowed, image_reason = await self.safety_auditor.audit_generated_images(
@@ -283,7 +293,7 @@ class GenerationExecutor:
         if not image_allowed:
             self.settle_generation_task_quota_once(
                 task_id,
-                actual_count=len(generated_file_paths),
+                actual_count=generated_count,
             )
             self.task_manager.mark_generation_task_failed(
                 task_id,
@@ -305,13 +315,13 @@ class GenerationExecutor:
 
         self.settle_generation_task_quota_once(
             task_id,
-            actual_count=len(generated_file_paths),
+            actual_count=generated_count,
         )
 
         if skip_direct_delivery:
             self.task_manager.mark_generation_task_succeeded(
                 task_id,
-                result_count=len(generated_file_paths),
+                result_count=generated_count,
                 result_paths=generated_file_paths,
                 message=result_message,
             )
@@ -323,7 +333,7 @@ class GenerationExecutor:
             unified_msg_origin=unified_msg_origin,
             is_usage_limit_admin=is_usage_limit_admin,
             duration=duration,
-            result_count=len(generated_file_paths),
+            result_count=generated_count,
             task_id=task_id,
             quota_record=self.task_manager.get_generation_task(task_id),
         )
@@ -345,7 +355,7 @@ class GenerationExecutor:
 
         self.task_manager.mark_generation_task_succeeded(
             task_id,
-            result_count=len(generated_file_paths),
+            result_count=generated_count,
             result_paths=generated_file_paths,
             message=delivery_message,
         )
@@ -399,9 +409,11 @@ class GenerationExecutor:
         aspect_ratio: str | None,
         resolution: str | None,
         image_count: int,
-    ) -> tuple[list[str], list[str]]:
+        gif_requested: bool = False,
+    ) -> tuple[list[str], int, list[str]]:
         """Generate all requested images concurrently under request-level limits."""
         generated_file_paths: list[str] = []
+        generated_count = 0
         errors: list[str] = []
         pending_tasks: dict[asyncio.Task, int] = {}
         next_index = 1
@@ -424,10 +436,10 @@ class GenerationExecutor:
             self.task_manager.update_generation_task_progress(
                 task_id,
                 current_index=current_index,
-                result_count=len(generated_file_paths),
+                result_count=generated_count,
                 message=(
                     f"子请求 {current_index}/{image_count} 已调度，"
-                    f"结果图片 {len(generated_file_paths)} 张"
+                    f"结果图片 {generated_count} 张"
                 ),
             )
             task = asyncio.create_task(
@@ -440,6 +452,7 @@ class GenerationExecutor:
                         task_id=task_id,
                         batch_index=current_index,
                         batch_count=image_count,
+                        gif_requested=gif_requested,
                         retry_status_callback=lambda retry_attempt, max_retry_attempts, current_index=current_index: (
                             self.task_manager.update_generation_task_retry_status(
                                 task_id,
@@ -523,7 +536,7 @@ class GenerationExecutor:
                         for img_bytes in result.images:
                             # Adapters can return more than one image per request.
                             # Never save/charge more images than were admitted.
-                            if len(generated_file_paths) >= image_count:
+                            if generated_count >= image_count:
                                 self.task_manager.update_generation_task_item_result(
                                     task_id,
                                     index=current_index,
@@ -536,6 +549,7 @@ class GenerationExecutor:
                             )
                             if file_path:
                                 generated_file_paths.append(file_path)
+                                generated_count += 1
                                 saved_count += 1
                                 self.task_manager.record_generation_task_output(
                                     task_id, file_path
@@ -564,14 +578,23 @@ class GenerationExecutor:
                                 status="succeeded",
                                 result_count=saved_count,
                             )
+                        if saved_count:
+                            for image in result.auxiliary_images:
+                                if path := self.image_processor.save_generated_image(
+                                    task_id, image
+                                ):
+                                    generated_file_paths.append(path)
+                                    self.task_manager.record_generation_task_output(
+                                        task_id, path, counted=False
+                                    )
 
                     self.task_manager.update_generation_task_progress(
                         task_id,
                         current_index=min(next_index, image_count),
-                        result_count=len(generated_file_paths),
+                        result_count=generated_count,
                         message=(
                             f"子请求 {min(next_index - 1, image_count)}/{image_count} 已完成，"
-                            f"结果图片 {len(generated_file_paths)} 张"
+                            f"结果图片 {generated_count} 张"
                         ),
                     )
 
@@ -589,7 +612,7 @@ class GenerationExecutor:
             if pending_tasks:
                 await asyncio.gather(*pending_tasks, return_exceptions=True)
 
-        return generated_file_paths, errors
+        return generated_file_paths, generated_count, errors
 
     async def _generate_one_image_request(
         self,

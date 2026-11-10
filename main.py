@@ -30,7 +30,11 @@ from .core.config.templates import format_template_summary
 from .core.generation.context_image_cache import RecentContextImageCache
 from .core.generation.executor import GenerationExecutor
 from .core.generation.image_processor import ImageProcessor
-from .core.generation.options import is_explicit_size, parse_generation_options
+from .core.generation.options import (
+    has_gif_prompt_prefix,
+    is_explicit_size,
+    parse_generation_options,
+)
 from .core.generation.quoted_text import collect_quoted_text, has_quoted_text_source
 from .core.generation.reference_collector import collect_command_reference_images
 from .core.llm.result_handler import LLMResultHandler
@@ -370,6 +374,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
         sender_id: str | None = None,
         caller_type: str = "auto",
         auto_send: bool = True,
+        gif_requested: bool = False,
     ) -> GenerationTaskRecord:
         """Create and track an image generation task in the unified task manager."""
         if preset is None:
@@ -434,6 +439,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 is_usage_limit_admin=is_usage_limit_admin,
                 deliver_via_ai=source == "LLM工具",
                 auto_send=auto_send,
+                gif_requested=gif_requested,
             )
 
         try:
@@ -610,6 +616,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
             yield event.plain_result(f"❌ {options.error}")
             return
         prompt = options.prompt
+        gif_requested = has_gif_prompt_prefix(prompt)
 
         aspect_ratio = self.config_manager.default_aspect_ratio
         resolution = self.config_manager.default_resolution
@@ -718,6 +725,7 @@ class ImageGenerationPlugin(CommandHandlerMixin, Star):
                 presets=matched_presets,
                 personas=matched_personas,
                 source_event=event,
+                gif_requested=gif_requested,
             )
         except asyncio.CancelledError:
             raise

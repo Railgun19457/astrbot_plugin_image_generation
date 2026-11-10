@@ -25,7 +25,7 @@ from ..config.templates import (
 from ..config.templates import (
     normalize_name_items as _normalize_name_items,
 )
-from ..generation.options import is_explicit_size
+from ..generation.options import has_gif_prompt_prefix, is_explicit_size
 from ..generation.reference_collector import (
     ContextReferenceImageNotFoundError,
     collect_tool_reference_images,
@@ -83,6 +83,7 @@ async def _start_generation_task(
     plugin: Any,
     event: Any,
     *,
+    gif_requested: bool = False,
     prompt: str,
     aspect_ratio: str,
     resolution: str,
@@ -180,6 +181,7 @@ async def _start_generation_task(
             presets=presets,
             personas=personas,
             source_event=event,
+            gif_requested=gif_requested,
         )
     except asyncio.CancelledError:
         raise
@@ -225,7 +227,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "生图时使用的额外提示词。设置 preset 或 persona 时可留空。",
+                    "description": "生图时使用的额外提示词。仅在用户明确要求 GIF 动图时以 GIF: 开头。设置 preset 或 persona 时可留空。",
                 },
                 "preset": {
                     "type": "string",
@@ -283,6 +285,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             return "❌ 插件未正确初始化 (Plugin instance missing)"
 
         prompt = str(kwargs.get("prompt", "") or "").strip()
+        gif_requested = has_gif_prompt_prefix(prompt)
         raw_aspect_ratio = kwargs.get("aspect_ratio")
         raw_resolution = kwargs.get("resolution")
         aspect_ratio = raw_aspect_ratio or plugin.config_manager.default_aspect_ratio
@@ -405,6 +408,7 @@ class ImageGenerationTool(FunctionTool[AstrAgentContext]):
             plugin,
             event,
             prompt=prompt,
+            gif_requested=gif_requested,
             aspect_ratio=str(aspect_ratio),
             resolution=str(resolution),
             reference_images=reference_images,

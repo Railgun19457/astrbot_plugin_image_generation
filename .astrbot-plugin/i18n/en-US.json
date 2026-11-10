@@ -308,11 +308,11 @@
           },
           "auto_gif": {
             "description": "Detect GIF from the prompt",
-            "hint": "When enabled, a prompt containing \"GIF\", \"动画\" or \"动图\" (case-insensitive) is sent as an animated GIF regardless of the output format above. Prompts without these words still use the configured output format."
+            "hint": "When enabled, start the original prompt with GIF: to request an animated GIF. Requires GIF support for the model and account."
           },
           "send_gif_storyboard": {
             "description": "Send the GIF storyboard",
-            "hint": "GIF responses include a static storyboard next to the animation. Turn this off to send the animation only; the request fails when no animation comes back."
+            "hint": "Include a static storyboard if the provider returns one with the animation. The storyboard does not count toward the requested image count or daily quota."
           },
           "frame_count": {
             "description": "GIF frame count",

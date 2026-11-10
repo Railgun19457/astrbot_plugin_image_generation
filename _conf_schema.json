@@ -303,13 +303,13 @@
           },
           "auto_gif": {
             "description": "自动识别 GIF",
-            "hint": "开启后，提示词中出现“GIF”“动画”“动图”时自动按 GIF 输出（不区分大小写），忽略上方输出格式；未命中时仍按输出格式。",
+            "hint": "开启后，原始提示词以 GIF:、动图：或动画：开头时改用 GIF 输出。需要模型和账号支持 GIF。",
             "type": "bool",
             "default": false
           },
           "send_gif_storyboard": {
             "description": "发送 GIF 分镜",
-            "hint": "GIF 输出时接口会随动图返回一张分镜图；关闭后只发送动图本身，接口未返回动图时直接报错。",
+            "hint": "部分供应商会附带静态分镜。开启时随动图返回分镜，分镜不占生成张数和每日额度。",
             "type": "bool",
             "default": true
           },

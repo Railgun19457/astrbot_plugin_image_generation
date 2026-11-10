@@ -402,9 +402,15 @@ class BaseImageAdapter(abc.ABC):
                     )
                 )
 
-            images, err = await self._generate_once(request)
-            if images is not None:
-                return GenerationResult(images=images, error=None)
+            attempt_result = await self._generate_once(request)
+            if isinstance(attempt_result, GenerationResult):
+                if attempt_result.images is not None:
+                    return attempt_result
+                err = attempt_result.error
+            else:
+                images, err = attempt_result
+                if images is not None:
+                    return GenerationResult(images=images)
 
             last_error = err or "生成失败"
             logger.debug(
@@ -498,9 +504,9 @@ class BaseImageAdapter(abc.ABC):
     @abc.abstractmethod
     async def _generate_once(
         self, request: GenerationRequest
-    ) -> tuple[list[bytes] | None, str | None]:
+    ) -> GenerationResult | tuple[list[bytes] | None, str | None]:
         """Execute one provider-specific generation request.
 
         Returns:
-            A tuple of generated images and an error message.
+            A generation result or the legacy tuple of images and error message.
         """

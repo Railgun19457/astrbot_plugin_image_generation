@@ -113,7 +113,7 @@ class GenerationTaskRecord:
     finished_at: datetime | None = None
     message: str = "任务已提交"
     error: str = ""
-    result_count: int = 0
+    result_count: int = 0  # Primary generated images, excluding auxiliary files.
     result_paths: list[str] = field(default_factory=list)
     delivered: bool = False
     delivered_at: datetime | None = None

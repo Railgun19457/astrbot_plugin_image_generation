@@ -1,8 +1,9 @@
-"""Extract explicit size options from command text without interpreting prose."""
+"""Extract explicit generation options without interpreting prose."""
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, NamedTuple
 
 from ..shared.constants import (
@@ -38,6 +39,14 @@ _FORWARD = re.compile(
 )
 _SUFFIX = re.compile(r"(?<!\S)(?P<value>\d+\s*[:：]\s*\d+|\d+(?:\.\d+)?\s*[kK])\s*$")
 _SEPARATORS = " \t\r\n，,；;、。"
+
+
+def has_gif_prompt_prefix(prompt: str) -> bool:
+    """Detect an explicit GIF request before appending any template or quote."""
+    marker, colon, _ = unicodedata.normalize("NFKC", str(prompt or "")).partition(":")
+    return bool(
+        colon and marker.strip().casefold() in {"gif", "动图", "動圖", "动画", "動畫"}
+    )
 
 
 def _is_cjk_letter(char: str) -> bool:

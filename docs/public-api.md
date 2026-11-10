@@ -29,7 +29,7 @@ api = image_plugin.public_api
 - 历史持久化内容包括会话标识、提示词摘要、结果路径和错误摘要，可通过“任务持久化”配置关闭或调整保留条数/天数；未结算额度任务仍保存不含提示词和图片路径的最小恢复记录
 - 生成的图片默认持久化到插件数据目录的 `generated_images/`，可通过“持久化生成的图片”和“持久化图片数量上限”控制
 - 关闭图片持久化或超出数量上限后，历史任务的 `result_paths` 可能指向已被清理的临时文件，调用方需要自行检查路径是否仍存在
-- `requested_count` 表示请求图片数量和最大保存数量；`result_count` 表示实际保存的结果图片数量，可能因部分失败少于请求数
+- `requested_count` 是请求的主图数量上限。`result_count` 是实际保存的主图数量。GIF 附带的分镜会出现在结果路径中，单独保存且不计入这两个数量。
 - 返回对象的 `code` 来自 `core.public_api.PublicAPIResultCode`，调用方可直接与字符串值比较，也可导入该枚举避免手写返回码
 
 ## 调用身份与额度
@@ -413,11 +413,11 @@ result = await api.generate_image_files(
 | `active` | `bool` | 任务是否仍在进行。 |
 | `source` | `str` | 任务来源。 |
 | `requested_count` | `int` | 请求图片数量与最大保存数量；部分失败时结果数会减少。 |
-| `result_count` | `int` | 实际保存的结果图片数量。 |
+| `result_count` | `int` | 实际保存的主图数量。 |
 | `reference_image_count` | `int` | 实际参考图数量。 |
 | `aspect_ratio` | `str` | 任务记录中的宽高比参数。 |
 | `resolution` | `str` | 任务记录中的分辨率参数。 |
-| `result_paths` | `list[str]` | 生成图片路径列表。 |
+| `result_paths` | `list[str]` | 生成结果的文件路径，可包含 GIF 分镜。 |
 | `error` | `str` | 失败原因。 |
 | `message` | `str` | 当前任务说明。 |
 | `created_at` | `datetime` | 创建时间。 |

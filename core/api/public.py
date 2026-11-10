@@ -14,7 +14,7 @@ from ..config.templates import (
     normalize_name_items,
     resolve_named_templates,
 )
-from ..generation.options import is_explicit_size
+from ..generation.options import has_gif_prompt_prefix, is_explicit_size
 from ..generation.reference_collector import (
     collect_reference_images_from_templates,
     deduplicate_reference_images,
@@ -192,6 +192,7 @@ class ImageGenerationPublicAPI:
                 source=request_source,
                 prompt=final_prompt,
                 images_data=references,
+                gif_requested=has_gif_prompt_prefix(prompt),
                 unified_msg_origin=scope,
                 aspect_ratio=str(final_aspect_ratio),
                 resolution=str(final_resolution),

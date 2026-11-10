@@ -451,7 +451,7 @@ class TaskManager(
         if result_paths is not None:
             record.result_paths = list(result_paths)
         final_result_count = (
-            result_count or len(record.result_paths) or record.result_count
+            result_count or record.result_count or len(record.result_paths)
         )
         record.result_count = max(0, final_result_count)
 
@@ -555,12 +555,15 @@ class TaskManager(
             else ""
         )
 
-    def record_generation_task_output(self, task_id: str, path: str) -> None:
+    def record_generation_task_output(
+        self, task_id: str, path: str, *, counted: bool = True
+    ) -> None:
         """Persist produced images so cancellation/restart charges partial output."""
         record = self._generation_tasks.get(task_id)
         if record and record.is_active:
             record.result_paths.append(path)
-            record.result_count = len(record.result_paths)
+            if counted:
+                record.result_count += 1
             self._save_generation_tasks()
 
     def update_generation_task_progress(
