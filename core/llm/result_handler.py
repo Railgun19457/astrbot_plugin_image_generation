@@ -14,7 +14,6 @@ from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.star import Context
 from astrbot.core.agent.message import TextPart
 from astrbot.core.agent.tool import ToolSet
-from astrbot.core.cron.events import CronMessageEvent
 from astrbot.core.db.po import Conversation
 from astrbot.core.platform.message_session import MessageSession
 from astrbot.core.provider.entities import ProviderRequest
@@ -353,6 +352,13 @@ class LLMResultHandler:
         source_event: AstrMessageEvent,
     ) -> None:
         """Run a proactive agent turn with the completed task result."""
+        if hasattr(self.context, "agent") and callable(
+            getattr(self.context.agent, "run_turn", None)
+        ):
+            await self._run_generation_result_agent_v430(record, source_event)
+            return
+
+        from astrbot.core.cron.events import CronMessageEvent
         from astrbot.core.astr_main_agent import (
             MainAgentBuildConfig,
             _get_session_conv,
@@ -543,3 +549,136 @@ class LLMResultHandler:
                 if llm_resp and llm_resp.usage
                 else None,
             )
+
+    async def _run_generation_result_agent_v430(
+        self, record: GenerationTaskRecord, source_event: AstrMessageEvent
+    ) -> None:
+        """Run the configured session Agent and relay only explicit task output."""
+        from astrbot.api.agents import (
+            ImageInput,
+            PathMedia,
+            PlainInput,
+            TurnStatus,
+            chain_from_content,
+        )
+
+        origin = record.unified_msg_origin
+        if origin != source_event.unified_msg_origin:
+            raise ValueError("Image result must use the source session")
+        provider = await self.context.get_using_provider_async(origin)
+        if provider is None:
+            raise RuntimeError("No chat provider available")
+        paths = self.image_processor.ensure_delivery_paths(record.result_paths)
+        supports_images = bool("image" in provider.provider_config.get("modalities", []) and paths)
+        payload = self._build_task_result_payload(
+            record, supports_image_input=supports_images, delivery_paths=paths
+        )
+        instruction = (
+            IMAGE_GENERATION_TASK_WOKE_SYSTEM_PROMPT
+            + "\nProceed according to your system instructions. "
+            "Output using same language as previous conversation. "
+            "Review the completed image generation task and decide whether the user "
+            "should see the result; deliver it with `send_message_to_user` when they "
+            "should, otherwise end this turn without sending anything."
+            "\n<image_generation_task_result>\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2)
+            + "\n</image_generation_task_result>"
+        )
+        content = [PlainInput(text=instruction)]
+        if supports_images:
+            content.extend(ImageInput(path=path) for path in paths)
+
+        session_id = getattr(getattr(source_event, "agent_session", None), "session_id", None)
+        if session_id is None:
+            request = source_event.get_extra("provider_request")
+            session_id = getattr(getattr(request, "conversation", None), "cid", None)
+        # Do not silently switch this background result to a newly-selected chat.
+        run = await self.context.agent.run_turn(
+            umo=origin,
+            source_event=source_event,
+            session_id=session_id,
+            input_message=content,
+            send_to_user=False,
+            metadata={"astrbot_plugin_image_generation": {"task_id": record.task_id}},
+        )
+
+        def delivery_reference(component) -> str | None:
+            source = getattr(component, "source", None)
+            if isinstance(source, PathMedia):
+                path = source.path
+                if path.casefold().startswith("file:"):
+                    from urllib.parse import urlsplit
+                    from urllib.request import url2pathname
+
+                    uri = urlsplit(path)
+                    if uri.netloc in ("", "localhost"):
+                        path = url2pathname(uri.path)
+                return path
+            return getattr(source, "url", None)
+
+        def reference_key(path: str) -> str:
+            return os.path.normcase(os.path.normpath(path))
+
+        seen_references: set[str] = set()
+        seen_outputs: set[tuple[str, ...]] = set()
+        sent_paths: list[str] = []
+        try:
+            async for event in run.events():
+                if event.type != "output.ready":
+                    continue
+                output = event.payload
+                if output.source != "tool" or output.target_umo != origin:
+                    continue
+                # The native tool has already checked permissions and media paths.
+                # Relay its complete message, including the original caption.
+                references = list(dict.fromkeys(
+                    ref for component in output.content
+                    if (ref := delivery_reference(component))
+                ))
+                signature = tuple(item.model_dump_json() for item in output.content)
+                keys = {reference_key(ref) for ref in references}
+                if not signature or signature in seen_outputs or keys & seen_references:
+                    continue
+                chain = chain_from_content(output.content)
+                if not await self.context.send_message(origin, chain):
+                    raise RuntimeError("Image task output delivery was not confirmed")
+                seen_outputs.add(signature)
+                seen_references.update(keys)
+                sent_paths.extend(references)
+                self.task_manager.mark_generation_task_delivered(record.task_id, paths=sent_paths)
+            result = await run.result()
+            if result.status == TurnStatus.CANCELLED:
+                return
+            if result.status != TurnStatus.COMPLETED:
+                raise RuntimeError("Image result Agent turn failed")
+        except BaseException:
+            if not run.done:
+                with suppress(Exception):
+                    await run.cancel()
+            raise
+
+        # Append an event rather than rewriting v4.30's existing conversation history.
+        if run.session.ref.runtime == "astrbot":
+            note = (
+                f"[ImageGenerationTask] task_id={record.task_id}, "
+                f"status={record.status.value}, result_count={record.result_count}, "
+                f"delivered={str(record.delivered).lower()}, error={record.error or ''}"
+            )
+            delivered_names = {os.path.basename(path) for path in sent_paths}
+            remaining = [path for path in paths if os.path.basename(path) not in delivered_names]
+            if sent_paths:
+                note += (
+                    f", delivered_paths={json.dumps(sent_paths, ensure_ascii=False)}. "
+                    "These images were already sent to the user; do not send them again."
+                )
+            if remaining:
+                note += (
+                    f", unsent_paths={json.dumps(remaining, ensure_ascii=False)}. "
+                    "These images were generated but not sent to the user; send them "
+                    "only when the conversation calls for it."
+                )
+            with suppress(Exception):
+                writer = await self.context.conversation_manager.create_event_writer(
+                    run.session.ref.session_id, unified_msg_origin=origin
+                )
+                await writer.append_message({"role": "assistant", "content": note})

@@ -10,7 +10,16 @@ from astrbot.api import logger
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
-from astrbot.core.tools.message_tools import SendMessageToUserTool
+try:
+    from astrbot.core.astr_agent_runtime.tools.message_tools import SendMessageToUserTool
+except ModuleNotFoundError as exc:
+    if exc.name not in {
+        "astrbot.core.astr_agent_runtime",
+        "astrbot.core.astr_agent_runtime.tools",
+        "astrbot.core.astr_agent_runtime.tools.message_tools",
+    }:
+        raise
+    from astrbot.core.tools.message_tools import SendMessageToUserTool
 from pydantic import Field
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 
