@@ -5,14 +5,28 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from astrbot.api import logger
 from astrbot.core.agent.run_context import ContextWrapper
 from astrbot.core.agent.tool import FunctionTool, ToolExecResult
 from astrbot.core.astr_agent_context import AstrAgentContext
-from astrbot.core.tools.message_tools import SendMessageToUserTool
 from pydantic import Field
 from pydantic.dataclasses import dataclass as pydantic_dataclass
+
+try:
+    from astrbot.core.astr_agent_runtime.tools.message_tools import (
+        SendMessageToUserTool,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name not in {
+        "astrbot.core.astr_agent_runtime",
+        "astrbot.core.astr_agent_runtime.tools",
+        "astrbot.core.astr_agent_runtime.tools.message_tools",
+    }:
+        raise
+    from astrbot.core.tools.message_tools import SendMessageToUserTool
 
 from ..config.templates import (
     build_generation_prompt,
@@ -719,6 +733,19 @@ class ImageTaskTool(FunctionTool[AstrAgentContext]):
         return "❌ 不支持的操作，请使用 list、detail 或 cancel"
 
 
+def delivery_reference_key(reference: str) -> str:
+    """Compare local image references without changing remote URLs."""
+    if reference.lower().startswith("file:"):
+        uri = urlsplit(reference)
+        path = uri.path
+        if uri.netloc and uri.netloc.lower() != "localhost":
+            path = f"//{uri.netloc}{path}"
+        reference = url2pathname(path)
+    if "://" in reference or reference.startswith("data:"):
+        return reference
+    return os.path.normcase(os.path.realpath(reference))
+
+
 @pydantic_dataclass
 class DeliverySendMessageToUserTool(SendMessageToUserTool):
     """Proactive-delivery variant of `send_message_to_user`.
@@ -729,51 +756,73 @@ class DeliverySendMessageToUserTool(SendMessageToUserTool):
     """
 
     delivered: bool = False
+    failed_notification: bool = False
+    failed_task_paths: set[str] = Field(default_factory=set)
+    result_paths_by_reference: dict[str, str] = Field(default_factory=dict)
     delivered_paths: list[str] = Field(default_factory=list)
-    sent_signatures: list[str] = Field(default_factory=list)
+    sent_signatures: set[str] = Field(default_factory=set)
+    sent_image_keys: set[str] = Field(default_factory=set)
+
+    @property
+    def delivery_failed(self) -> bool:
+        """Whether a delivery failure remained after the agent could retry."""
+        return self.failed_notification or bool(self.failed_task_paths)
 
     async def call(
         self,
         context: ContextWrapper[AstrAgentContext],
         **kwargs: Any,
     ) -> ToolExecResult:
-        """Deliver the message unless the same content was already delivered."""
+        """Deliver new images in order and record confirmed task results."""
+        origin = context.context.event.unified_msg_origin
+        session = kwargs.get("session")
+        if session and session != origin:
+            return "error: image task results can only be sent to their source session."
         messages = kwargs.get("messages")
-        if not isinstance(messages, list):
-            messages = []
-        image_paths = [
-            str(item.get("path") or item.get("url"))
-            for item in messages
-            if isinstance(item, dict)
-            and (item.get("path") or item.get("url"))
-            and str(item.get("type", "")).lower() != "plain"
-        ]
-        delivered = {
-            os.path.normcase(os.path.normpath(path)) for path in self.delivered_paths
-        }
-        repeated = any(
-            os.path.normcase(os.path.normpath(path)) in delivered
-            for path in image_paths
-        )
-        signature = json.dumps(
-            messages, ensure_ascii=False, sort_keys=True, default=str
-        )
-        if repeated or signature in self.sent_signatures:
-            logger.warning(f"{LOG} 已拒绝同一次运行内重复发送的内容")
-            return (
-                "error: this content was already sent to the user in this turn; "
-                "do not send it again."
-            )
+        if not isinstance(messages, list) or not messages:
+            return "error: messages parameter is empty or invalid."
+        signature = json.dumps(messages, sort_keys=True, default=str)
+        if signature in self.sent_signatures:
+            return "This content was already sent. Do not send it again."
 
-        result = await super().call(context, **kwargs)
+        remaining = []
+        image_keys: set[str] = set()
+        task_paths: list[str] = []
+        for item in messages:
+            if isinstance(item, dict) and str(item.get("type", "")).lower() == "image":
+                reference = item.get("path") or item.get("url")
+                if isinstance(reference, str) and reference.strip():
+                    key = delivery_reference_key(reference.strip())
+                    task_path = self.result_paths_by_reference.get(key)
+                    if task_path:
+                        key = delivery_reference_key(task_path)
+                    if key in self.sent_image_keys or key in image_keys:
+                        continue
+                    image_keys.add(key)
+                    if task_path:
+                        task_paths.append(task_path)
+            remaining.append(item)
+        if not remaining:
+            return "These images were already sent. Do not send them again."
+
+        kwargs["messages"] = remaining
+        try:
+            result = await super().call(context, **kwargs)
+        except Exception:
+            self.failed_task_paths.update(task_paths)
+            self.failed_notification = True
+            raise
         if isinstance(result, str) and result.lstrip().startswith("error"):
+            self.failed_task_paths.update(task_paths)
+            self.failed_notification = True
             return result
 
-        self.sent_signatures.append(signature)
+        self.sent_signatures.add(signature)
+        self.sent_image_keys.update(image_keys)
+        self.failed_task_paths.difference_update(task_paths)
+        self.failed_notification = False
         self.delivered = True
-        for path in image_paths:
-            if path not in self.delivered_paths:
-                self.delivered_paths.append(path)
+        self.delivered_paths.extend(task_paths)
         return result
 
 
